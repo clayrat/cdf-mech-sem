@@ -1,5 +1,6 @@
 *~
 .coqdeps.d
+.CoqMakefile.d
 CoqMakefile
 CoqMakefile.conf
 .*.aux

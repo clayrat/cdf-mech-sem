@@ -1,9 +1,22 @@
-From Coq Require Import Arith ZArith Psatz Bool String List Program.Equality.
-From CDF Require Import Sequences Simulation.
+From Equations Require Import Equations.
+From Coq Require Import ssreflect ssrfun ssrbool String.
+From mathcomp Require Import ssrnat ssrint ssralg ssrnum eqtype order.
+From CDF Require Import Sequences.
 
+Derive Signature for star.
+
+Import Order.Theory GRing.Theory.
 Local Open Scope string_scope.
-Local Open Scope Z_scope.
-Local Open Scope list_scope.
+Local Open Scope ring_scope.
+
+Definition eq_string (a b : string) : bool :=
+  match string_dec a b with left _ => true | right _ => false end.
+
+Lemma eq_stringP : Equality.axiom eq_string.
+Proof. move=>x y; apply: (iffP idP); rewrite /eq_string; by case: (string_dec _ _). Qed.
+
+Canonical Structure string_eqMixin := EqMixin eq_stringP.
+Canonical Structure string_eqType := Eval hnf in EqType _ string_eqMixin.
 
 (** * 1.  The IMP language *)
 
@@ -14,7 +27,7 @@ Definition ident := string.
 (** The abstract syntax: an arithmetic expression is either... *)
 
 Inductive aexp : Type :=
-  | CONST (n: Z)                       (**r a constant, or *)
+  | CONST (n: int)                       (**r a constant, or *)
   | VAR (x: ident)                     (**r a variable, or *)
   | PLUS (a1: aexp) (a2: aexp)         (**r a sum of two expressions, or *)
   | MINUS (a1: aexp) (a2: aexp).       (**r a difference of two expressions *)
@@ -23,9 +36,9 @@ Inductive aexp : Type :=
   the integer value denoted by an expression.  This function is
   parameterized by a store [s] that associates values to variables. *)
 
-Definition store : Type := ident -> Z.
+Definition store : Type := ident -> int.
 
-Fixpoint aeval (a: aexp) (s: store) : Z :=
+Fixpoint aeval (a: aexp) (s: store) : int :=
   match a with
   | CONST n => n
   | VAR x => s x
@@ -36,9 +49,9 @@ Fixpoint aeval (a: aexp) (s: store) : Z :=
 (** Such evaluation functions / denotational semantics have many uses.
     First, we can use [aeval] to evaluate a given expression in a given store. *)
 
-Eval compute in (aeval (PLUS (VAR "x") (MINUS (VAR "x") (CONST 1)))  (fun x => 2)).
+Eval compute in (aeval (PLUS (VAR "x") (MINUS (VAR "x") (CONST 1))) (fun => 2)).
 
-(** Result: [ = 3 : Z ]. *)
+(** Result: [ = 3 : int ]. *)
 
 (** We can also do partial evaluation with respect to an unknown store *)
 
@@ -48,10 +61,10 @@ Eval cbn in (aeval (PLUS (VAR "x") (MINUS (CONST 10) (CONST 1)))).
 
 (** We can prove mathematical properties of a given expression. *)
 
-Lemma aeval_xplus1:
-  forall s x, aeval (PLUS (VAR x) (CONST 1)) s > aeval (VAR x) s.
+Lemma aeval_xplus1 s x :
+  aeval (PLUS (VAR x) (CONST 1)) s > aeval (VAR x) s.
 Proof.
-  intros. cbn. lia.
+by rewrite ltz_addr1 lexx.
 Qed.
 
 (** Finally, we can prove "meta-properties" that hold for all expressions.
@@ -68,20 +81,23 @@ Fixpoint free_in_aexp (x: ident) (a: aexp) : Prop :=
   | PLUS a1 a2 | MINUS a1 a2 => free_in_aexp x a1 \/ free_in_aexp x a2
   end.
 
-Theorem aeval_free:
-  forall s1 s2 a,
+Theorem aeval_free s1 s2 a :
   (forall x, free_in_aexp x a -> s1 x = s2 x) ->
   aeval a s1 = aeval a s2.
 Proof.
-  induction a; cbn; intros SAMEFREE.
+elim: a=>/=.
 - (* Case a = CONST n *)
-  auto.
+  by [].
 - (* Case a = VAR x *)
-  apply SAMEFREE. auto.
+  by move=>x; apply.
 - (* Case a = PLUS a1 a2 *)
-  rewrite IHa1, IHa2; auto.
-- (* Case a = MINUS a1 a2 *)
-  rewrite IHa1, IHa2; auto.
+  move=>a1 IH1 a2 IH2 H.
+  rewrite IH1; last by move=>x Hx; apply: H; left.
+  by rewrite IH2 //; move=>x Hx; apply: H; right.
+(* Case a = MINUS a1 a2 *)
+move=>a1 IH1 a2 IH2 H.
+rewrite IH1; last by move=>x Hx; apply: H; left.
+by rewrite IH2 //; move=>x Hx; apply: H; right.
 Qed.
 
 (** ** 1.2.  Growing the language of arithmetic expressions *)
@@ -94,9 +110,9 @@ Definition OPP (a: aexp) : aexp := MINUS (CONST 0) a.
 
 (** Its semantics is the one we expect. *)
 
-Lemma aeval_OPP: forall s a, aeval (OPP a) s = - (aeval a s).
+Lemma aeval_OPP s a : aeval (OPP a) s = -aeval a s.
 Proof.
-  intros; cbn. lia.
+by rewrite /= sub0r.
 Qed.
 
 (** In other cases, we must add constructors to the [aexp] type
@@ -106,13 +122,13 @@ Qed.
 Module AExp_mul.
 
 Inductive aexp : Type :=
-  | CONST (n: Z)
+  | CONST (n: int)
   | VAR (x: ident)
   | PLUS (a1: aexp) (a2: aexp)
   | MINUS (a1: aexp) (a2: aexp)
   | TIMES (a1: aexp) (a2: aexp).      (**r NEW! *)
 
-Fixpoint aeval (a: aexp) (s: store) : Z :=
+Fixpoint aeval (a: aexp) (s: store) : int :=
   match a with
   | CONST n => n
   | VAR x => s x
@@ -128,7 +144,7 @@ End AExp_mul.
 Module AExp_div.
 
 Inductive aexp : Type :=
-  | CONST (n: Z)
+  | CONST (n: int)
   | VAR (x: ident)
   | PLUS (a1: aexp) (a2: aexp)
   | MINUS (a1: aexp) (a2: aexp)
@@ -137,7 +153,7 @@ Inductive aexp : Type :=
 
 (** We have a problem!  The evaluation of an expression can now fail,
   in case of a division by zero.  We must change the type of [aeval]
-  to reflect this error case: [aeval] now returns an option type [option Z].
+  to reflect this error case: [aeval] now returns an option type [option int].
   The result [Some n] means "no errors, and the value is [n]".
   The result [None] means "error during evaluation".
 
@@ -149,13 +165,13 @@ Inductive aexp : Type :=
     by a machine (e.g. 64-bit integers); this is a run-time error as well.
 *)
 
-Definition min_int := - (2 ^ 63).  (**r the smallest representable integer *)
-Definition max_int := 2 ^ 63 - 1.  (**r the greatest representable integer *)
+Definition min_int := - ((2 : int) ^ 63).  (**r the smallest representable integer *)
+Definition max_int := (2 : int) ^ 63 - 1.  (**r the greatest representable integer *)
 
-Definition check_for_overflow (n: Z): option Z :=
-  if (min_int <=? n) && (n <=? max_int) then Some n else None.
+Definition check_for_overflow (n: int): option int :=
+  if (min_int <= n) && (n <= max_int) then Some n else None.
 
-Fixpoint aeval (s: ident -> option Z) (a: aexp) : option Z :=
+Fixpoint aeval (s: ident -> option int) (a: aexp) : option int :=
   match a with
   | CONST n => check_for_overflow n
   | VAR x => s x
@@ -176,7 +192,7 @@ Fixpoint aeval (s: ident -> option Z) (a: aexp) : option Z :=
       end
   | QUOT a1 a2 =>
       match aeval s a1, aeval s a2 with
-      | Some n1, Some n2 => if n2 =? 0 then None else check_for_overflow (n1 / n2)
+      | Some n1, Some n2 => if n2 == 0 then None else check_for_overflow (n1 / n2)
       | _, _ => None
       end
   end.
@@ -204,9 +220,9 @@ Fixpoint beval (b: bexp) (s: store) : bool :=
   match b with
   | TRUE => true
   | FALSE => false
-  | EQUAL a1 a2 => aeval a1 s =? aeval a2 s
-  | LESSEQUAL a1 a2 => aeval a1 s <=? aeval a2 s
-  | NOT b1 => negb (beval b1 s)
+  | EQUAL a1 a2 => aeval a1 s == aeval a2 s
+  | LESSEQUAL a1 a2 => aeval a1 s <= aeval a2 s
+  | NOT b1 => ~~ beval b1 s
   | AND b1 b2 => beval b1 s && beval b2 s
   end.
 
@@ -225,16 +241,10 @@ Definition OR (b1 b2: bexp) : bexp := NOT (AND (NOT b1) (NOT b2)).
 (** *** Exercise (1 star) *)
 (** Prove that the [OR] derived form has the expected semantics. *)
 
-Lemma beval_OR:
-  forall s b1 b2, beval (OR b1 b2) s = beval b1 s || beval b2 s.
+Lemma beval_OR s b1 b2 : beval (OR b1 b2) s = beval b1 s || beval b2 s.
 Proof.
-  intros; cbn.
-  (* Hint: use "SearchAbout negb" to see the available lemmas
-     that deal with Boolean negation. *)
-  (* Hint: or just do a case analysis on [beval b1 s] and [beval b2 s],
-     there are only 4 cases to consider. *)
-  (* FILL IN HERE *)
-Abort.
+by rewrite /= -negb_or negbK.
+Qed.
 
 (** ** 1.4 Commands *)
 
@@ -274,17 +284,17 @@ Definition Euclidean_division :=
     [update x v s] is the store that maps [x] to [v] and is equal to [s] for
     all variables other than [x]. *)
 
-Definition update (x: ident) (v: Z) (s: store) : store :=
-  fun y => if string_dec x y then v else s y.
+Definition update (x: ident) (v: int) (s: store) : store :=
+  fun y => if x == y then v else s y.
 
-Lemma update_same: forall x v s, (update x v s) x = v.
+Lemma update_same x v s : (update x v s) x = v.
 Proof.
-  unfold update; intros. destruct (string_dec x x); congruence.
+by rewrite /update eqxx.
 Qed.
 
-Lemma update_other: forall x v s y, x <> y -> (update x v s) y = s y.
+Lemma update_other x v s y : x != y -> (update x v s) y = s y.
 Proof.
-  unfold update; intros. destruct (string_dec x y); congruence.
+by rewrite /update; case: eqP.
 Qed.
 
 (** Naively, we would like to define the semantics of a command with
@@ -336,25 +346,45 @@ Inductive red: com * store -> com * store -> Prop :=
   | red_ifthenelse: forall b c1 c2 s,
       red (IFTHENELSE b c1 c2, s) ((if beval b s then c1 else c2), s)
   | red_while_done: forall b c s,
-      beval b s = false ->
+      ~~ beval b s ->
       red (WHILE b c, s) (SKIP, s)
   | red_while_loop: forall b c s,
-      beval b s = true ->
+      beval b s ->
       red (WHILE b c, s) (SEQ c (WHILE b c), s).
 
 (** An interesting property of this reduction relation is that it is
     functional: a configuration [(c,s)] reduces to at most one configuration.
     This corresponds to the fact that IMP is a deterministic language. *)
 
-Lemma red_determ:
-  forall cs cs1, red cs cs1 -> forall cs2, red cs cs2 -> cs1 = cs2.
+(* equations seems to mess with erefl *)
+Lemma red_determ cs cs1 : red cs cs1 -> forall cs2, red cs cs2 -> cs1 = cs2.
 Proof.
-  induction 1; intros cs2 R2; inversion R2; subst; eauto.
-- inversion H3.
-- inversion H.
-- assert (EQ: (c2, s2) = (c4, s3)) by auto. congruence.
-- congruence.
-- congruence.
+elim.
+- move=>x a s cs2 R.
+  by case E: _ _ / R => //; case: E=><-<-<-.
+- move=>c s cs2 R.
+  case: {-2}_ {-1}_ / R (@erefl _ (SKIP;;c, s)) (@erefl _ cs2)=>//.
+  - by move=>_ _ [->->].
+  move=>?? s1 c2 s2 R; case=>E; rewrite E in R.
+  by case: {-2}_ {-1}_ / R (@erefl _ (SKIP, s1)) (@erefl _ (c2, s2)).
+- move=>c1 c s1 c2 s2 R' IH cs2 R.
+  case: {-2}_ {-1}_ / R (@erefl _ (c1;;c, s1)) (@erefl _ cs2)=>//.
+  - move=>c0 s [E]; rewrite -E in R'.
+    by case: {-2}_ {-1}_ / R' (@erefl _ (SKIP, s1)) (@erefl _ (c2, s2)).
+  move=>c3 c4 s3 c5 s4 R''.
+  case=>E1 {c4}-> E2 _; rewrite {c3}E1 {s3}E2 in R''.
+  by case: (IH _ R'')=><-<-.
+- move=>b c1 c2 s cs2 R.
+  case: {-2}_ {-1}_ / R (@erefl _ (IFTHENELSE b c1 c2, s)) (@erefl _ cs2)=>//.
+  by move=>_ _ _ _[->->->->].
+- move=>b c s H cs2 R.
+  case: {-2}_ {-1}_ / R (@erefl _ (WHILE b c, s)) (@erefl _ cs2)=>//.
+  - by move=>_ _ _ _ [_ _ ->].
+  by move=>??? H2 [E1 _ E2]; rewrite E1 E2 in H2; rewrite H2 in H.
+move=>b c s H cs2 R.
+case: {-2}_ {-1}_ / R (@erefl _ (WHILE b c, s)) (@erefl _ cs2)=>//.
+- by move=>??? H2 [E1 _ E2]; rewrite E1 E2 in H2; rewrite H in H2.
+by move=>_ _ _ _ [->->->].
 Qed.
 
 (** We define the semantics of a command by chaining successive reductions.
@@ -385,39 +415,51 @@ Definition diverges (s: store) (c: com) : Prop :=
    not a final configuration, that is, [c' <> SKIP]. *)
 
 Definition goes_wrong (s: store) (c: com) : Prop :=
-  exists c', exists s',
-  star red (c, s) (c', s') /\ irred red (c', s') /\ c' <> SKIP.
+  exists c' s',
+  [/\ star red (c, s) (c', s'), irred red (c', s') & c' <> SKIP].
 
 (** *** Exercise (2 stars) *)
 (** Prove that IMP command never go wrong.
     Hint: first show the following "progress" property, showing that
     a command other than [SKIP] can always reduce. *)
 
-Lemma red_progress:
-  forall c s, c = SKIP \/ exists c', exists s', red (c, s) (c', s').
+Lemma red_progress c s :
+  c = SKIP \/ exists c' s', red (c, s) (c', s').
 Proof.
-  induction c; intros.
-  (* FILL IN HERE *)
-Abort.
+elim: c.
+- by left.
+- move=>x a; right.
+  by exists SKIP, (update x (aeval a s) s); constructor.
+- move=>c1 H1 c2 _; right.
+  case: H1.
+  - by move=>->; exists c2, s; constructor.
+  by case=>c'[s' R]; exists (c';;c2), s'; constructor.
+- move=>b c1 _ c2 _; right.
+  by exists (if beval b s then c1 else c2), s; constructor.
+move=>b c1 H1; right.
+case/boolP: (beval b s)=>H.
+- by exists (SEQ c1 (WHILE b c1)), s; constructor.
+by exists SKIP, s; constructor.
+Qed.
 
-Lemma not_goes_wrong:
-  forall c s, ~(goes_wrong s c).
+Lemma not_goes_wrong c s : ~(goes_wrong s c).
 Proof.
-  intros c s (c' & s' & STAR & IRRED & NOTSKIP).
-  (* FILL IN HERE *)
-Abort.
+case=>c'[s'][S I N].
+by case: (red_progress c' s')=>// [[c1]][s2 /I].
+Qed.
 
 (** A technical lemma: a sequence of reductions can take place to the left
     of a [SEQ] constructor.  This generalizes rule [red_seq_step]. *)
 
-Lemma red_seq_steps:
-  forall c2 s c s' c',
+Lemma red_seq_steps c2 s c s' c' :
   star red (c, s) (c', s') -> star red ((c;;c2), s) ((c';;c2), s').
 Proof.
-  intros. dependent induction H.
-- apply star_refl.
-- destruct b as [c1 st1].
-  apply star_step with (c1;;c2, st1). apply red_seq_step. auto. auto.  
+move=>H; depind H.
+- by apply: star_refl.
+case: b H H0 IHstar=>c1 s1 R S IH.
+apply: (@star_step _ _ _ (c1;;c2, s1)).
+- by apply: red_seq_step.
+by apply: IH.
 Qed.
 
 (** ** 1.6.  Natural semantics *)
@@ -434,10 +476,10 @@ Inductive cexec: store -> com -> store -> Prop :=
       cexec s (if beval b s then c1 else c2) s' ->
       cexec s (IFTHENELSE b c1 c2) s'
   | cexec_while_done: forall b c s,
-      beval b s = false ->
+      ~~ beval b s ->
       cexec s (WHILE b c) s
   | cexec_while_loop: forall b c s s' s'',
-      beval b s = true -> cexec s c s' -> cexec s' (WHILE b c) s'' ->
+      beval b s -> cexec s c s' -> cexec s' (WHILE b c) s'' ->
       cexec s (WHILE b c) s''.
 
 (** The predicate [cexec s c s'] holds iff there exists a finite derivation
@@ -450,15 +492,11 @@ Inductive cexec: store -> com -> store -> Prop :=
     satisfy [cexec].  As an example, [WHILE TRUE SKIP] does not satisfy [cexec].
 *)
 
-Lemma cexec_infinite_loop:
-  forall s, ~ exists s', cexec s (WHILE TRUE SKIP) s'.
+Lemma cexec_infinite_loop s : ~ exists s', cexec s (WHILE TRUE SKIP) s'.
 Proof.
-  assert (A: forall s c s', cexec s c s' -> c = WHILE TRUE SKIP -> False).
-  { induction 1; intros EQ; inversion EQ.
-  - subst b c. cbn in H. discriminate.
-  - subst b c. apply IHcexec2. auto.
-  }
-  intros s (s' & EXEC). apply A with (s := s) (c := WHILE TRUE SKIP) (s' := s'); auto.
+have A s1 c s2 : cexec s1 c s2 -> c <> WHILE TRUE SKIP.
+- by move=>H; elim: H=>//; case.
+by case=>s1 H; apply: (A _ _ _ H).
 Qed.
 
 (** We now show an equivalence between evaluations that terminate according
@@ -470,25 +508,29 @@ Qed.
     We start with the natural semantics => reduction sequence direction,
     which is proved by an elegant induction on the derivation of [cexec]. *)
 
-Theorem cexec_to_reds:
-  forall s c s', cexec s c s' -> star red (c, s) (SKIP, s').
+Theorem cexec_to_reds s c s' : cexec s c s' -> star red (c, s) (SKIP, s').
 Proof.
-  induction 1.
+elim.
 - (* SKIP *)
-  apply star_refl.
+  by move=>x; apply: star_refl.
 - (* ASSIGN *)
-  apply star_one. apply red_assign. 
+  by move=>s1 x a; apply/star_one/red_assign.
 - (* SEQ *)
-  eapply star_trans. apply red_seq_steps. apply IHcexec1.
-  eapply star_step.  apply red_seq_done.  apply IHcexec2.
+  move=>c1 c2 s1 s2 s3 H1 Hs1 H2 Hs2.
+  apply: star_trans.
+  - by apply/red_seq_steps/Hs1.
+  by apply: star_step; first by apply: red_seq_done.
 - (* IFTHENELSE *)
-  eapply star_step. apply red_ifthenelse. auto.
+  move=>b c1 c2 s1 s2 H1 H2.
+  by apply: star_step; first by apply: red_ifthenelse.
 - (* WHILE stop *)
-  apply star_one. apply red_while_done. auto.
-- (* WHILE loop *)
-  eapply star_step. apply red_while_loop. auto.
-  eapply star_trans. apply red_seq_steps. apply IHcexec1.
-  eapply star_step. apply red_seq_done. apply IHcexec2.
+  move=>b c1 s1 H.
+  by apply/star_one/red_while_done.
+(* WHILE loop *)
+move=>b c1 s1 s2 s3 Hb Hc1 Hs1 Hc2 Hs2.
+apply: star_step; first by apply: red_while_loop.
+apply: star_trans; first by apply/red_seq_steps/Hs1.
+by apply: star_step; first by apply: red_seq_done.
 Qed.
 
 (** The other direction, from a reduction sequence to a [cexec]
@@ -502,7 +544,7 @@ Lemma red_append_cexec:
 Proof.
   intros until s2; intros STEP. dependent induction STEP; intros.
 - (* red_assign *)
-  inversion H; subst. apply cexec_assign. 
+  inversion H; subst. apply cexec_assign.
 - (* red_seq_done *)
   apply cexec_seq with s2. apply cexec_skip. auto.
 - (* red seq step *)
@@ -708,7 +750,7 @@ Definition kdiverges (s: store) (c: com) : Prop :=
     diagrams that we also use to prove the correctness of the IMP compiler
     (module [Compil]).  This proof is fairly technical and can be skipped
     on first reading.
-    
+
     Here is the relation between a configuration of the continuation semantics
     and a configuration of the reduction semantics.
 *)
@@ -759,7 +801,7 @@ Qed.
 Theorem kterminates_terminates:
   forall s c s', kterminates s c s' -> terminates s c s'.
 Proof.
-  intros. 
+  intros.
   destruct (simulation_star _ _ _ _ _ _ simulation_cont_red _ _ H (c, s)) as ((c' & s'') & STAR & INV).
   constructor; auto.
   inversion INV; subst. apply STAR.
@@ -768,7 +810,7 @@ Qed.
 Theorem kdiverges_diverges:
   forall s c, kdiverges s c ->  diverges s c.
 Proof.
-  intros. 
+  intros.
   apply (simulation_infseq _ _ _ _ _ _ simulation_cont_red _ _ H).
   constructor; auto.
 Qed.
@@ -791,7 +833,7 @@ Lemma invert_red_apply_cont:
   red (apply_cont k c, s) (c', s') ->
   red_apply_cont_cases k c s c' s'.
 Proof.
-  induction k; simpl; intros. 
+  induction k; simpl; intros.
 - (* Kstop *)
   change c' with (apply_cont Kstop c'). apply racc_base; auto.
 - (* Kseq *)
@@ -801,7 +843,7 @@ Proof.
     * (* seq finish *)
       apply racc_skip_seq.
     * (* seq step *)
-      change (apply_cont k (c4;;c)) with (apply_cont (Kseq c k) c4). 
+      change (apply_cont k (c4;;c)) with (apply_cont (Kseq c k) c4).
       apply racc_base; auto.
 - (* Kwhile *)
   specialize (IHk _ _ _ _ H). inversion IHk; subst.
@@ -809,7 +851,7 @@ Proof.
     * (* seq finish *)
       apply racc_skip_while.
     * (* seq step *)
-      change (apply_cont k (c4;;WHILE b c)) with (apply_cont (Kwhile b c k) c4). 
+      change (apply_cont k (c4;;WHILE b c)) with (apply_cont (Kwhile b c k) c4).
       apply racc_base; auto.
 Qed.
 
@@ -834,15 +876,15 @@ Proof.
     constructor; auto.
   + edestruct IHred as (((cx & kx) & sx) & A & B); eauto.
     econstructor; split.
-    eapply plus_left. constructor. apply plus_star. eexact A. 
+    eapply plus_left. constructor. apply plus_star. eexact A.
     exact B.
   + econstructor; split. apply plus_one; constructor. constructor; auto.
   + econstructor; split. apply plus_one; apply step_while_done; auto. constructor; auto.
   + econstructor; split. apply plus_one; apply step_while_loop; auto. constructor; auto.
-- econstructor; split. 
+- econstructor; split.
   left; apply plus_one; constructor.
   constructor; auto.
-- econstructor; split. 
+- econstructor; split.
   left; apply plus_one; constructor.
   constructor; auto.
 Qed.
@@ -859,7 +901,7 @@ Qed.
 Theorem terminates_kterminates:
   forall s c s', terminates s c s' -> kterminates s c s'.
 Proof.
-  intros. 
+  intros.
   destruct (simulation_star _ _ _ _ _ _ simulation_red_cont _ _ H (c, Kstop, s)) as ((c' & s'') & STAR & INV).
   constructor; auto.
   inversion INV; subst.
@@ -869,7 +911,7 @@ Qed.
 Theorem diverges_kdiverges:
   forall s c, diverges s c ->  kdiverges s c.
 Proof.
-  intros. 
+  intros.
   apply (simulation_infseq _ _ _ _ _ _ simulation_red_cont _ _ H).
   constructor; auto.
 Qed.
