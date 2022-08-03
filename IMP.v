@@ -1,7 +1,7 @@
 From Equations Require Import Equations.
 From Coq Require Import ssreflect ssrfun ssrbool String.
 From mathcomp Require Import ssrnat ssrint ssralg ssrnum eqtype order.
-From CDF Require Import Sequences.
+From CDF Require Import Sequences Simulation.
 
 Derive Signature for star.
 
@@ -352,6 +352,8 @@ Inductive red: com * store -> com * store -> Prop :=
       beval b s ->
       red (WHILE b c, s) (SEQ c (WHILE b c), s).
 
+Derive Signature for red.
+
 (** An interesting property of this reduction relation is that it is
     functional: a configuration [(c,s)] reduces to at most one configuration.
     This corresponds to the fact that IMP is a deterministic language. *)
@@ -538,38 +540,52 @@ Qed.
     reduction step followed by a [cexec] execution can combine into a
     [cexec] execution. *)
 
-Lemma red_append_cexec:
-  forall c1 s1 c2 s2, red (c1, s1) (c2, s2) ->
+Lemma red_append_cexec c1 s1 c2 s2 :
+  red (c1, s1) (c2, s2) ->
   forall s', cexec s2 c2 s' -> cexec s1 c1 s'.
 Proof.
-  intros until s2; intros STEP. dependent induction STEP; intros.
+move=>H; depind H.
 - (* red_assign *)
-  inversion H; subst. apply cexec_assign.
+  move=>s' Hc.
+  case: {-2}_ {-1}_ {-1}_ / Hc (@erefl _ (update x (aeval a s) s)) (@erefl _ SKIP) (@erefl _ s')=>//.
+  by move=>_ -> _ {s'}_; apply: cexec_assign.
 - (* red_seq_done *)
-  apply cexec_seq with s2. apply cexec_skip. auto.
+  by move=>s' Hc; apply: cexec_seq; first by apply: cexec_skip.
 - (* red seq step *)
-  inversion H; subst. apply cexec_seq with s'0.
-  eapply IHSTEP; eauto.
-  auto.
+  move=>s' Hc.
+  case: {-2}_ {-1}_ {-1}_ / Hc (@erefl _ s2) (@erefl _ (c2;;c)) (@erefl _ s')=>//.
+  move=>c3 c4 s3 s4 s5 H1 H2 E1 [E2 E3] E4;
+    rewrite {s3}E1 -{c3}E2 in H1; rewrite -{c4}E3 in H2;
+    rewrite -{s5}E4 in H2 *.
+  apply/cexec_seq/H2.
+  by apply: IHred.
 - (* red_ifthenelse *)
-  apply cexec_ifthenelse. auto.
+  move=>s' Hc.
+  by apply: cexec_ifthenelse.
 - (* red_while_done *)
-  inversion H0; subst. apply cexec_while_done. auto.
-- (* red while loop *)
-  inversion H0; subst. apply cexec_while_loop with s'0; auto.
+  move=>s' Hc.
+  case: {-2}_ {-1}_ {-1}_ / Hc (@erefl _ s) (@erefl _ SKIP) (@erefl _ s')=>//.
+  by move=>_-> _ _; apply: cexec_while_done.
+(* red while loop *)
+move=>s' Hc.
+case: {-2}_ {-1}_ {-1}_ / Hc (@erefl _ s) (@erefl _ (c;; WHILE b c)) (@erefl _ s')=>//.
+move=>c1 c2 s1 s2 s3 H1 H2 E1 [E2 E3] E4;
+  rewrite {s1}E1 in H1 *; rewrite -{c1}E2 in H1;
+  rewrite -{c2}E3 in H2; rewrite -{s3}E4 in H2 *.
+by apply: (cexec_while_loop _ _ _ _ _ _ H1).
 Qed.
 
 (** By induction on the reduction sequence, it follows that a command
     that reduces to [SKIP] executes according to the natural semantics,
     with the same final state. *)
 
-Theorem reds_to_cexec:
-  forall s c s',
+Theorem reds_to_cexec s c s' :
   star red (c, s) (SKIP, s') -> cexec s c s'.
 Proof.
-  intros. dependent induction H.
-- apply cexec_skip.
-- destruct b as [c1 s1]. apply red_append_cexec with c1 s1; auto.
+move=>H; depind H.
+- by apply: cexec_skip.
+case: b H H0 IHstar=>c1 s1 R S IH.
+by apply/(red_append_cexec _ _ _ _ R)/IH.
 Qed.
 
 (** ** 1.7.  Bounded interpreter *)
@@ -585,28 +601,24 @@ Qed.
     either the command diverges, or more fuel is needed to execute it. *)
 
 Fixpoint cexec_f (fuel: nat) (s: store) (c: com) : option store :=
-  match fuel with
-  | O => None
-  | S fuel' =>
-      match c with
-      | SKIP => Some s
-      | ASSIGN x a => Some (update x (aeval a s) s)
-      | SEQ c1 c2 =>
-          match cexec_f fuel' s c1 with
-          | None  => None
-          | Some s' => cexec_f fuel' s' c2
-          end
-      | IFTHENELSE b c1 c2 =>
-          cexec_f fuel' s (if beval b s then c1 else c2)
-      | WHILE b c1 =>
-          if beval b s then
-            match cexec_f fuel' s c1 with
-            | None  => None
-            | Some s' => cexec_f fuel' s' (WHILE b c1)
-            end
+  if fuel is fuel'.+1 then
+    match c with
+    | SKIP => Some s
+    | ASSIGN x a => Some (update x (aeval a s) s)
+    | SEQ c1 c2 =>
+        if cexec_f fuel' s c1 is Some s'
+          then cexec_f fuel' s' c2
+          else None
+    | IFTHENELSE b c1 c2 =>
+        cexec_f fuel' s (if beval b s then c1 else c2)
+    | WHILE b c1 =>
+        if beval b s then
+          if cexec_f fuel' s c1 is Some s'
+            then cexec_f fuel' s' (WHILE b c1)
+            else None
           else Some s
-      end
-  end.
+    end
+    else None.
 
 (** This bounded execution function is very useful to compute the semantics
     of test programs.  For example, let's compute the quotient and the remainder
@@ -614,8 +626,8 @@ Fixpoint cexec_f (fuel: nat) (s: store) (c: com) : option store :=
     above. *)
 
 Eval compute in
-  (let s := update "a" 14 (update "b" 3 (fun _ => 0)) in
-   match cexec_f 100 s Euclidean_division with
+  (let s := update "a" 14 (update "b" 3 (fun => 0)) in
+   match cexec_f 8 s Euclidean_division with
    | None => None
    | Some s' => Some (s' "q", s' "r")
    end).
@@ -625,22 +637,44 @@ Eval compute in
 (** Show that function [cexec_f] is sound with respect to the natural semantics
     [cexec], by proving the two following lemmas. *)
 
-Lemma cexec_f_sound:
-  forall fuel s c s', cexec_f fuel s c = Some s' -> cexec s c s'.
+Lemma cexec_f_sound fuel s c s' :
+  cexec_f fuel s c = Some s' -> cexec s c s'.
 Proof.
-  induction fuel as [ | fuel ]; cbn; intros.
-- discriminate.
-- destruct c.
-  (* FILL IN HERE *)
-Abort.
+elim: fuel s s' c =>[|fuel IH] //= s s'; case.
+- by case=><-; constructor.
+- by move=>x a [<-]; constructor.
+- move=>c1 c2; case E: (cexec_f fuel s c1)=>[s1|] // H.
+  by apply: (cexec_seq _ _ _ s1); apply: IH.
+- move=>b c1 c2 H.
+  by apply: cexec_ifthenelse; apply: IH.
+move=>b c1; case/boolP: (beval b s)=>H.
+- case E: (cexec_f fuel s c1)=>[s1|] // H2.
+  by apply: (cexec_while_loop _ _ _ s1)=>//; apply: IH.
+by case=><-; apply: cexec_while_done.
+Qed.
 
-Lemma cexec_f_complete:
-  forall s c s', cexec s c s' ->
-  exists fuel1, forall fuel, (fuel >= fuel1)%nat -> cexec_f fuel s c = Some s'.
+Lemma cexec_f_complete s c s':
+  cexec s c s' ->
+  exists fuel1, forall fuel, (fuel >= fuel1)%N -> cexec_f fuel s c = Some s'.
 Proof.
-  induction 1.
-  (* FILL IN HERE *)
-Abort.
+elim.
+- move=>s1.
+  by exists 1%N; case.
+- move=>s1 x a.
+  by exists 1%N; case.
+- move=>c1 c2 s1 s2 s3 H1 [f1 IH1] H2 [f2 IH2].
+  exists (f1+f2).+1%N; case=>//= n; rewrite ltnS=>H.
+  rewrite IH1; last by apply/leq_trans/H/leq_addr.
+  by apply/IH2/leq_trans/H/leq_addl.
+- move=>b c1 c2 s1 s2 H1 [f H2].
+  by exists f.+1; case.
+- move=>b c1 s1 H.
+  by exists 1%N; case=>//= n _; rewrite (negbTE H).
+move=>b c1 s1 s2 s3 H H1 [f1 IH1] H2 [f2 IH2].
+exists (f1+f2).+1%N; case=>//= n; rewrite ltnS=>H0.
+rewrite H IH1; last by apply/leq_trans/H0/leq_addr.
+by apply/IH2/leq_trans/H0/leq_addl.
+Qed.
 
 (** ** 1.8.  Transition semantics with continuations *)
 
@@ -715,11 +749,11 @@ Inductive step: com * cont * store -> com * cont * store -> Prop :=
       step (IFTHENELSE b c1 c2, k, s) ((if beval b s then c1 else c2), k, s)
 
   | step_while_done: forall b c k s,          (**r computation *)
-      beval b s = false ->
+      ~~ beval b s ->
       step (WHILE b c, k, s) (SKIP, k, s)
 
   | step_while_loop: forall b c k s,          (**r computation + focusing *)
-      beval b s = true ->
+      beval b s ->
       step (WHILE b c, k, s) (c, Kwhile b c k, s)
 
   | step_skip_seq: forall c k s,              (**r resumption *)
@@ -766,53 +800,80 @@ Inductive match_conf : com * cont * store -> com * store -> Prop :=
     in the command. *)
 
 Fixpoint num_seq (c: com) : nat :=
-  match c with
-  | SEQ c1 c2 => S (num_seq c1)
-  | _ => O
-  end.
+  if c is SEQ c1 c2
+    then (num_seq c1).+1
+    else 0%N.
 
 Definition kmeasure (C: com * cont * store) : nat :=
-  let '(c, k, s) := C in num_seq c.
+  let: (c, _, _) := C in num_seq c.
 
-Remark red_apply_cont:
-  forall k c1 s1 c2 s2,
+Remark red_apply_cont k c1 s1 c2 s2 :
   red (c1, s1) (c2, s2) ->
   red (apply_cont k c1, s1) (apply_cont k c2, s2).
 Proof.
-  induction k; intros; simpl; eauto using red_seq_step.
+elim: k c1 s1 c2 s2 =>//=.
+- move=>c k IH c1 s1 c2 s2 H.
+  by apply/IH/red_seq_step.
+move=>b c k IH c1 s1 c2 s2 H.
+by apply/IH/red_seq_step.
 Qed.
 
-Lemma simulation_cont_red:
-  forall C1 C1', step C1 C1' ->
+Lemma simulation_cont_red C1 C1' :
+  step C1 C1' ->
   forall C2, match_conf C1 C2 ->
   exists C2',
-     (plus red C2 C2' \/ (star red C2 C2' /\ kmeasure C1' < kmeasure C1))%nat
+     (plus red C2 C2' \/ (star red C2 C2' /\ kmeasure C1' < kmeasure C1))%N
   /\ match_conf C1' C2'.
 Proof.
-  destruct 1; intros C2 MC; inversion MC; subst; cbn.
-  2: econstructor; split; [right; split; [apply star_refl | lia] | constructor; auto ].
-  1-6: econstructor; split; [left; apply plus_one; apply red_apply_cont; auto using red | constructor; auto].
+case=>[x a k s|c1 c2 s k|b c1 c2 k s|b c k s Hb|b c k s Hb|c k s|b c k s] C2 R.
+- case: {-1}_ _ / R (@erefl _ (ASSIGN x a, k, s))=>/= c k1 s1 c' H;
+  case=>E1 E2 {s1}<-; rewrite -{c}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+  exists (apply_cont k SKIP, update x (aeval a s) s); split; last by constructor.
+  by left; apply: plus_one; apply: red_apply_cont; constructor.
+- case: {-1}_ _ / R (@erefl _ (c1;;c2, k, s))=>/= c k1 s1 c' H;
+  case=>E1 E2 {s1}<-; rewrite -{c}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+  exists (apply_cont (Kseq c2 k) c1, s); split; last by constructor.
+  by right; split=>//=; exact: star_refl.
+- case: {-1}_ _ / R (@erefl _ (IFTHENELSE b c1 c2, k, s))=>/= c k1 s1 c' H;
+  case=>E1 E2 {s1}<-; rewrite -{c}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+  exists (apply_cont k (if beval b s then c1 else c2), s); split; last by constructor.
+  by left; apply: plus_one; apply: red_apply_cont; constructor.
+- case: {-1}_ _ / R (@erefl _ (WHILE b c, k, s))=>/= c1 k1 s1 c' H;
+  case=>E1 E2 {s1}<-; rewrite -{c1}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+  exists (apply_cont k SKIP, s); split; last by constructor.
+  by left; apply: plus_one; apply: red_apply_cont; constructor.
+- case: {-1}_ _ / R (@erefl _ (WHILE b c, k, s))=>/= c1 k1 s1 c' H;
+  case=>E1 E2 {s1}<-; rewrite -{c1}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+  exists (apply_cont (Kwhile b c k) c, s); split; last by constructor.
+  by left; apply: plus_one; apply: red_apply_cont; constructor.
+- case: {-1}_ _ / R (@erefl _ (SKIP, Kseq c k, s))=>/= c1 k1 s1 c' H;
+  case=>E1 E2 {s1}<-; rewrite -{c1}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+  exists (apply_cont k c, s); split; last by constructor.
+  by left; apply: plus_one; apply: red_apply_cont; constructor.
+case: {-1}_ _ / R (@erefl _ (SKIP, Kwhile b c k, s))=>/= c1 k1 s1 c' H;
+case=>E1 E2 {s1}<-; rewrite -{c1}E1 in H *; rewrite -{k1}E2 in H; rewrite {c'}H /=.
+exists (apply_cont k (WHILE b c), s); split; last by constructor.
+by left; apply: plus_one; apply: red_apply_cont; constructor.
 Qed.
 
 (** It follows that termination according to the continuation semantics
     implies termination according to the reduction semantics,
     and likewise for divergence. *)
 
-Theorem kterminates_terminates:
-  forall s c s', kterminates s c s' -> terminates s c s'.
+Theorem kterminates_terminates s c s' : kterminates s c s' -> terminates s c s'.
 Proof.
-  intros.
-  destruct (simulation_star _ _ _ _ _ _ simulation_cont_red _ _ H (c, s)) as ((c' & s'') & STAR & INV).
-  constructor; auto.
-  inversion INV; subst. apply STAR.
+move=>H.
+case: (simulation_star _ _ _ _ _ _ simulation_cont_red _ _ H (c, s)); first by constructor.
+case=>c' s'' [S I].
+by case: {-1}_ {-1}_ / I (@erefl _ (SKIP, Kstop, s')) (@erefl _ (c', s''))=>/= c1 k1 s1 c'' H';
+case=>E1 E2 {s1}<-; case=>E3 E4; rewrite -{c1}E1 -{k1}E2 in H'; rewrite {c'}E3 {s''}E4 {c''}H' /= in S.
 Qed.
 
-Theorem kdiverges_diverges:
-  forall s c, kdiverges s c ->  diverges s c.
+Theorem kdiverges_diverges s c : kdiverges s c -> diverges s c.
 Proof.
-  intros.
-  apply (simulation_infseq _ _ _ _ _ _ simulation_cont_red _ _ H).
-  constructor; auto.
+move=>H.
+apply: (simulation_infseq _ _ _ _ _ _ simulation_cont_red _ _ H).
+by constructor.
 Qed.
 
 (** The reverse implications follow from the symmetrical simulation diagram.
@@ -828,90 +889,103 @@ Inductive red_apply_cont_cases: cont -> com -> store -> com -> store -> Prop :=
   | racc_skip_while: forall b c k s,
       red_apply_cont_cases (Kwhile b c k) SKIP s (apply_cont k (WHILE b c)) s.
 
-Lemma invert_red_apply_cont:
-  forall k c s c' s',
+Lemma invert_red_apply_cont k c s c' s' :
   red (apply_cont k c, s) (c', s') ->
   red_apply_cont_cases k c s c' s'.
 Proof.
-  induction k; simpl; intros.
+elim: k c=>/= [|c1 k IH|b c1 k IH] c.
 - (* Kstop *)
-  change c' with (apply_cont Kstop c'). apply racc_base; auto.
+  by rewrite (_ : c' = apply_cont Kstop c') //; exact: racc_base.
 - (* Kseq *)
-  specialize (IHk _ _ _ _ H). inversion IHk; subst.
-  + (* base *)
-    inversion H0; clear H0; subst.
-    * (* seq finish *)
-      apply racc_skip_seq.
-    * (* seq step *)
-      change (apply_cont k (c4;;c)) with (apply_cont (Kseq c k) c4).
-      apply racc_base; auto.
-- (* Kwhile *)
-  specialize (IHk _ _ _ _ H). inversion IHk; subst.
-  inversion H0; clear H0; subst.
-    * (* seq finish *)
-      apply racc_skip_while.
-    * (* seq step *)
-      change (apply_cont k (c4;;WHILE b c)) with (apply_cont (Kwhile b c k) c4).
-      apply racc_base; auto.
+  move/IH=>H; case: {1}_ _ _ _ / H (@erefl _ (c;; c1))=>//= c2 s1 c3 s3 k2 H E;
+  rewrite {c2}E in H.
+  (* base *)
+  case: {-2}_ {-1}_ / H (@erefl _ (c;; c1, s1)) (@erefl _ (c3, s3))=>//.
+  - (* seq finish *)
+    move=>_ _ [<-->->][<-<-].
+    by apply: racc_skip_seq.
+  (* seq step *)
+  move=>c4 c5 s2 c6 s4 H [E1 {c5}-> E2][{c3}->{s3}->];
+  rewrite {c4}E1 {s2}E2 in H.
+  rewrite (_ : apply_cont k2 (c6;; c1) = apply_cont (Kseq c1 k2) c6) //.
+  by apply: racc_base.
+(* Kwhile *)
+move/IH=>H. case: {1}_ _ _ _ / H (@erefl _ (c;; WHILE b c1))=>//= c2 s1 c3 s3 k2 H E;
+rewrite {c2}E in H.
+case: {-2}_ {-1}_ / H (@erefl _ (c;; WHILE b c1, s1)) (@erefl _ (c3, s3))=>//.
+- (* seq finish *)
+  move=>_ _ [<-->->][->->].
+  by apply: racc_skip_while.
+(* seq step *)
+move=>c4 c5 s2 c6 s4 H [E1 {c5}-> E2][{c3}->{s3}->];
+rewrite {c4}E1 {s2}E2 in H.
+rewrite (_ : apply_cont k2 (c6;; WHILE b c1) = apply_cont (Kwhile b c1 k2) c6) //.
+by apply: racc_base.
 Qed.
 
-Definition rmeasure (C: com * store) : nat := O.   (**r there is no stuttering *)
+Lemma simulation_red_cont' C1 C1' :
+  red C1 C1' ->
+  forall C2, match_conf C2 C1 ->
+  exists C2', plus step C2 C2' /\ match_conf C2' C1'.
+Proof.
+move=>R C2 MC; case: {C1 C2}MC R=>c k s _ ->; case: C1'=>c' s' R.
+have {R}A: red_apply_cont_cases k c s c' s' by apply: invert_red_apply_cont.
+case: A=>{c k s c' s'}//.
+- move=>c1 s1 c2 s2 k H; depind H.
+  - exists (SKIP, k, update x (aeval a s) s); split; last by constructor.
+    by apply: plus_one; constructor.
+  - exists (c, k, s); split; last by constructor.
+    apply: plus_left; first by apply: step_seq.
+    by apply/star_one/step_skip_seq.
+  - case: (IHred (Kseq c k))=>[[[cx kx] sx]][A /= B].
+    exists (cx, kx, sx); split=>//.
+    apply: plus_left; first by apply: step_seq.
+    by apply: plus_star.
+  - exists ((if beval b s then c1 else c2), k, s); split; last by constructor.
+    by apply: plus_one; constructor.
+  - exists (SKIP, k, s); split; last by constructor.
+    by apply: plus_one; constructor.
+  exists (c, Kwhile b c k, s); split; last by constructor.
+  by apply: plus_one; constructor.
+- move=>c k s; exists (c, k, s); split; last by constructor.
+  by apply: plus_one; constructor.
+move=>b c k s; exists (WHILE b c, k, s); split; last by constructor.
+by apply: plus_one; constructor.
+Qed.
 
-Lemma simulation_red_cont:
-  forall C1 C1', red C1 C1' ->
+Definition rmeasure (C: com * store) : nat := 0.   (**r there is no stuttering *)
+
+Corollary simulation_red_cont C1 C1' :
+  red C1 C1' ->
   forall C2, match_conf C2 C1 ->
   exists C2',
-     (plus step C2 C2' \/ (star step C2 C2' /\ rmeasure C1' < rmeasure C1))%nat
+     (plus step C2 C2' \/ (star step C2 C2' /\ rmeasure C1' < rmeasure C1))%N
   /\ match_conf C2' C1'.
 Proof.
-  intros C1 C1' R C2 MC. inversion MC; subst. destruct C1' as (c' & s').
-  assert (A: red_apply_cont_cases k c s c' s') by (apply invert_red_apply_cont; auto).
-  clear MC R. inversion A; subst; clear A.
-- cut (exists C2', plus step (c, k, s) C2' /\ match_conf C2' (apply_cont k c2, s')).
-  intros (C2' & A & B). exists C2'; auto.
-  revert k. dependent induction H; intros.
-  + econstructor; split. apply plus_one; constructor. constructor; auto.
-  + econstructor; split.
-    eapply plus_left. constructor. eapply star_one. constructor.
-    constructor; auto.
-  + edestruct IHred as (((cx & kx) & sx) & A & B); eauto.
-    econstructor; split.
-    eapply plus_left. constructor. apply plus_star. eexact A.
-    exact B.
-  + econstructor; split. apply plus_one; constructor. constructor; auto.
-  + econstructor; split. apply plus_one; apply step_while_done; auto. constructor; auto.
-  + econstructor; split. apply plus_one; apply step_while_loop; auto. constructor; auto.
-- econstructor; split.
-  left; apply plus_one; constructor.
-  constructor; auto.
-- econstructor; split.
-  left; apply plus_one; constructor.
-  constructor; auto.
+move=>R C2 MC.
+case: (simulation_red_cont' _ _ R C2 MC)=>C2' [H1 H2].
+by exists C2'; split=>//; left.
 Qed.
 
-Lemma apply_cont_is_skip:
-  forall k c, apply_cont k c = SKIP -> k = Kstop /\ c = SKIP.
+Lemma apply_cont_is_skip k c :
+  apply_cont k c = SKIP -> k = Kstop /\ c = SKIP.
 Proof.
-  induction k; cbn; intros.
-- auto.
-- apply IHk in H. intuition discriminate.
-- apply IHk in H. intuition discriminate.
+by elim: k c=>//= [c1 k IH|b c1 k IH] c; case/IH.
 Qed.
 
-Theorem terminates_kterminates:
-  forall s c s', terminates s c s' -> kterminates s c s'.
+Theorem terminates_kterminates s c s' :
+  terminates s c s' -> kterminates s c s'.
 Proof.
-  intros.
-  destruct (simulation_star _ _ _ _ _ _ simulation_red_cont _ _ H (c, Kstop, s)) as ((c' & s'') & STAR & INV).
-  constructor; auto.
-  inversion INV; subst.
-  edestruct apply_cont_is_skip; eauto. subst k c0. apply STAR.
+move=>H.
+case: (simulation_star _ _ _ _ _ _ simulation_red_cont _ _ H (c, Kstop, s)); first by constructor.
+case=>[[c' k']] s'' [S I].
+case: {-2}_ {-2}_ / I (@erefl _ (c', k', s'')) (@erefl _ (SKIP, s'))=>_ _ _ _ -> [->->->].
+by case=>/apply_cont_is_skip [E1 E2 E3]; rewrite {k'}E1 {c'}E2 {s''}E3 in S.
 Qed.
 
-Theorem diverges_kdiverges:
-  forall s c, diverges s c ->  kdiverges s c.
+Theorem diverges_kdiverges s c :
+  diverges s c ->  kdiverges s c.
 Proof.
-  intros.
-  apply (simulation_infseq _ _ _ _ _ _ simulation_red_cont _ _ H).
-  constructor; auto.
+move=>H; apply: (simulation_infseq _ _ _ _ _ _ simulation_red_cont _ _ H).
+by constructor.
 Qed.

@@ -10,10 +10,10 @@ An HTML pretty-printing of the commented sources is also available:
 
 1. The semantics of an imperative language
    * Library [Sequences](https://xavierleroy.org/cdf-mech-sem/CDF.Sequences.html): definitions and properties of reduction sequences.
+   * Library [Simulation](https://xavierleroy.org/cdf-mech-sem/CDF.Simulation.html): simulation diagrams between two transition systems.
    * Module [IMP](https://xavierleroy.org/cdf-mech-sem/CDF.IMP.html): the imperative language IMP and its various semantics.
 
 2. Formal verification of a compiler
-   * Library [Simulation](https://xavierleroy.org/cdf-mech-sem/CDF.Simulation.html): simulation diagrams between two transition systems.
    * Module [Compil](https://xavierleroy.org/cdf-mech-sem/CDF.Compil.html): compiling IMP to a virtual machine.
 
 3. Optimizations, static analyses, and their verification
