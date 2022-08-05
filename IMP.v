@@ -789,6 +789,7 @@ Definition kdiverges (s: store) (c: com) : Prop :=
     and a configuration of the reduction semantics.
 *)
 
+(* simulation invariant *)
 Inductive match_conf : com * cont * store -> com * store -> Prop :=
   | match_conf_intro: forall c k s c',
       c' = apply_cont k c ->

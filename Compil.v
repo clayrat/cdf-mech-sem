@@ -1,9 +1,12 @@
-From Coq Require Import Arith ZArith Psatz Bool String List Program.Equality.
+From Equations Require Import Equations.
+From Coq Require Import ssreflect ssrfun ssrbool String.
+From mathcomp Require Import ssrnat ssrint ssralg ssrnum ssrAC eqtype order seq.
 From CDF Require Import Sequences IMP Simulation.
 
+Import GRing.Theory.
 Local Open Scope string_scope.
-Local Open Scope Z_scope.
-Local Open Scope list_scope.
+Local Open Scope ring_scope.
+Local Open Scope seq_scope.
 
 (** * 2. Compiling IMP to a stack machine *)
 
@@ -21,23 +24,23 @@ Local Open Scope list_scope.
 (** Here is the instruction set of the machine: *)
 
 Inductive instr : Type :=
-  | Iconst (n: Z)           (**r push the integer [n] *)
-  | Ivar (x: ident)         (**r push the current value of variable [x] *)
-  | Isetvar (x: ident)      (**r pop an integer and assign it to variable [x] *)
-  | Iadd                    (**r pop two integers, push their sum *)
-  | Iopp                    (**r pop one integer, push its opposite *)
-  | Ibranch (d: Z)          (**r skip forward or backward [d] instructions *)
-  | Ibeq (d1: Z) (d0: Z)    (**r pop two integers, skip [d1] instructions if equal, [d0] if not equal *)
-  | Ible (d1: Z) (d0: Z)    (**r pop two integer, skip [d1] instructions if less or equal, [d0] if greater *)
-  | Ihalt.                  (**r stop execution *)
+  | Iconst (n: int)           (**r push the integer [n] *)
+  | Ivar (x: ident)           (**r push the current value of variable [x] *)
+  | Isetvar (x: ident)        (**r pop an integer and assign it to variable [x] *)
+  | Iadd                      (**r pop two integers, push their sum *)
+  | Iopp                      (**r pop one integer, push its opposite *)
+  | Ibranch (d: int)          (**r skip forward or backward [d] instructions *)
+  | Ibeq (d1: int) (d0: int)  (**r pop two integers, skip [d1] instructions if equal, [d0] if not equal *)
+  | Ible (d1: int) (d0: int)  (**r pop two integer, skip [d1] instructions if less or equal, [d0] if greater *)
+  | Ihalt.                    (**r stop execution *)
 
 (** A piece of machine code is a list of instructions. *)
 
-Definition code := list instr.
+Definition code := seq instr.
 
 (** The length (number of instructions) of a piece of code. *)
 
-Definition codelen (c: code) : Z := Z.of_nat (List.length c).
+Definition codelen (c: code) : int := size c.
 
 (** *** 2.1.2.  Operational semantics *)
 
@@ -48,17 +51,16 @@ Definition codelen (c: code) : Z := Z.of_nat (List.length c).
   - a store assigning integer values to variables.
 *)
 
-Definition stack : Type := list Z.
+Definition stack : Type := seq int.
 
-Definition config : Type := (Z * stack * store)%type.
+Definition config : Type := (int * stack * store)%type.
 
 (** [instr_at C pc = Some i] if [i] is the instruction at position [pc] in [C]. *)
 
-Fixpoint instr_at (C: code) (pc: Z) : option instr :=
-  match C with
-  | nil => None
-  | i :: C' => if pc =? 0 then Some i else instr_at C' (pc - 1)
-  end.
+Fixpoint instr_at (C: code) (pc: int) : option instr :=
+  if C is i :: C'
+    then if pc == 0 then Some i else instr_at C' (pc - 1)
+    else None.
 
 (** The semantics of the machine is given in small-step style as a
     transition system: a relation between machine configurations
@@ -70,7 +72,7 @@ Fixpoint instr_at (C: code) (pc: Z) : option instr :=
 Inductive transition (C: code): config -> config -> Prop :=
   | trans_const: forall pc σ s n,
       instr_at C pc = Some(Iconst n) ->
-      transition C (pc    , σ     , s) 
+      transition C (pc    , σ     , s)
                    (pc + 1, n :: σ, s)
   | trans_var: forall pc σ s x,
       instr_at C pc = Some(Ivar x) ->
@@ -95,12 +97,12 @@ Inductive transition (C: code): config -> config -> Prop :=
                    (pc', σ, s)
   | trans_beq: forall pc σ s d1 d0 n1 n2 pc',
       instr_at C pc = Some(Ibeq d1 d0) ->
-      pc' = pc + 1 + (if n1 =? n2 then d1 else d0) ->
+      pc' = pc + 1 + (if n1 == n2 then d1 else d0) ->
       transition C (pc , n2 :: n1 :: σ, s)
                    (pc', σ            , s)
   | trans_ble: forall pc σ s d1 d0 n1 n2 pc',
       instr_at C pc = Some(Ible d1 d0) ->
-      pc' = pc + 1 + (if n1 <=? n2 then d1 else d0) ->
+      pc' = pc + 1 + (if n1 <= n2 then d1 else d0) ->
       transition C (pc , n2 :: n1 :: σ, s)
                    (pc', σ            , s).
 
@@ -115,22 +117,22 @@ Definition transitions (C: code): config -> config -> Prop :=
     and the evaluation stack is empty. *)
 
 Definition machine_terminates (C: code) (s_init: store) (s_final: store) : Prop :=
-  exists pc, transitions C (0, nil, s_init) (pc, nil, s_final)
+  exists pc, transitions C (0, [::], s_init) (pc, [::], s_final)
           /\ instr_at C pc = Some Ihalt.
 
 (** The machine can also run forever, making infinitely many transitions. *)
 
 Definition machine_diverges (C: code) (s_init: store) : Prop :=
-  infseq (transition C) (0, nil, s_init).
+  infseq (transition C) (0, [::], s_init).
 
 (** Yet another possibility is that the machine gets stuck after some
     transitions. *)
 
 Definition machine_goes_wrong (C: code) (s_init: store) : Prop :=
   exists pc σ s,
-      transitions C (0, nil, s_init) (pc, σ, s)
+      transitions C (0, [::], s_init) (pc, σ, s)
    /\ irred (transition C) (pc, σ, s)
-   /\ (instr_at C pc <> Some Ihalt \/ σ <> nil).
+   /\ (instr_at C pc <> Some Ihalt \/ σ <> [::]).
 
 (** *** Exercise (2 stars). *)
 
@@ -139,7 +141,7 @@ Definition machine_goes_wrong (C: code) (s_init: store) : Prop :=
     instead of inductively-defined relations.  This is similar to the
     [cinterp] function for the IMP language.
 
-    To ensure termination of the machine interpreter, we need to bound 
+    To ensure termination of the machine interpreter, we need to bound
     the number of instructions it can execute.  The result of the
     machine interpreter, therefore, is of the following type:
 *)
@@ -153,14 +155,21 @@ Inductive machine_result : Type :=
     machine interpreter: *)
 
 Fixpoint mach_exec (C: code) (fuel: nat)
-                   (pc: Z) (σ: stack) (s: store) : machine_result :=
+                   (pc: int) (σ: stack) (s: store) : machine_result :=
   match fuel with
   | O => Timeout
   | S fuel' =>
       match instr_at C pc, σ with
-      | Some Ihalt, nil => Terminates s
+      | Some Ihalt, [::] => Terminates s
       | Some (Iconst n), σ => mach_exec C fuel' (pc + 1) (n :: σ) s
       (* FILL IN HERE *)
+      | Some (Ivar x), σ => mach_exec C fuel' (pc + 1) (s x :: σ) s
+      | Some (Isetvar x), n :: σ => mach_exec C fuel' (pc + 1) σ (update x n s)
+      | Some Iadd, n2 :: n1 :: σ => mach_exec C fuel' (pc + 1) ((n1 + n2) :: σ) s
+      | Some Iopp, n :: σ => mach_exec C fuel' (pc + 1) ((-n) :: σ) s
+      | Some (Ibranch d), σ => mach_exec C fuel' (pc + 1 + d) σ s
+      | Some (Ibeq d1 d0), n2 :: n1 :: σ => mach_exec C fuel' (pc + 1 + (if n1 == n2 then d1 else d0)) σ s
+      | Some (Ible d1 d0), n2 :: n1 :: σ => mach_exec C fuel' (pc + 1 + (if n1 <= n2 then d1 else d0)) σ s
       | _, _ => Stuck
       end
   end.
@@ -179,21 +188,21 @@ Fixpoint mach_exec (C: code) (fuel: nat)
 
 Fixpoint compile_aexp (a: aexp) : code :=
   match a with
-  | CONST n => Iconst n :: nil
-  | VAR x => Ivar x :: nil
-  | PLUS a1 a2  => compile_aexp a1 ++ compile_aexp a2 ++ Iadd :: nil
-  | MINUS a1 a2 => compile_aexp a1 ++ compile_aexp a2 ++ Iopp :: Iadd :: nil
+  | CONST n => [:: Iconst n]
+  | VAR x => [:: Ivar x]
+  | PLUS a1 a2  => compile_aexp a1 ++ compile_aexp a2 ++ [::Iadd]
+  | MINUS a1 a2 => compile_aexp a1 ++ compile_aexp a2 ++ [::Iopp; Iadd]
   end.
 
 (** Examples of compiled code. *)
 
 Eval compute in (compile_aexp (PLUS (CONST 1) (CONST 2))).
 
-(** Result: [Iconst 1 :: Iconst 2 :: Iadd :: nil] *)
+(** Result: [:: Iconst 1%Z; Iconst 2%Z; Iadd] *)
 
 Eval compute in (compile_aexp (PLUS (VAR "x") (MINUS (VAR "y") (CONST 1)))).
 
-(** Result: [Ivar "x" :: Ivar "y" :: Iconst 1 :: Iopp :: Iadd :: Iadd :: nil]. *)
+(** Result: [:: Ivar "x"; Ivar "y"; Iconst 1%Z; Iopp; Iadd; Iadd]. *)
 
 (** For Boolean expressions [b], we could produce code that deposits [1] or [0]
     at the top of the stack, depending on whether [b] is true or false.
@@ -207,12 +216,12 @@ Eval compute in (compile_aexp (PLUS (VAR "x") (MINUS (VAR "y") (CONST 1)))).
     stack is unchanged.
 *)
 
-Fixpoint compile_bexp (b: bexp) (d1: Z) (d0: Z) : code :=
+Fixpoint compile_bexp (b: bexp) (d1: int) (d0: int) : code :=
   match b with
-  | TRUE => if d1 =? 0 then nil else Ibranch d1 :: nil
-  | FALSE => if d0 =? 0 then nil else Ibranch d0 :: nil
-  | EQUAL a1 a2 => compile_aexp a1 ++ compile_aexp a2 ++ Ibeq d1 d0 :: nil
-  | LESSEQUAL a1 a2 => compile_aexp a1 ++ compile_aexp a2 ++ Ible d1 d0 :: nil
+  | TRUE => if d1 == 0 then [::] else [::Ibranch d1]
+  | FALSE => if d0 == 0 then [::] else [::Ibranch d0]
+  | EQUAL a1 a2 => compile_aexp a1 ++ compile_aexp a2 ++ [::Ibeq d1 d0]
+  | LESSEQUAL a1 a2 => compile_aexp a1 ++ compile_aexp a2 ++ [::Ible d1 d0]
   | NOT b1 => compile_bexp b1 d0 d1
   | AND b1 b2 =>
       let code2 := compile_bexp b2 d1 d0 in
@@ -227,23 +236,23 @@ Fixpoint compile_bexp (b: bexp) (d1: Z) (d0: Z) : code :=
 
 Eval compute in (compile_bexp (EQUAL (VAR "x") (CONST 1)) 12 34).
 
-(** Result: [ Ivar "x" :: Iconst 1 :: Ibeq 12 34 :: nil ]. *)
+(** Result: [:: Ivar "x"; Iconst 1%Z; Ibeq 12%Z 34%Z]. *)
 
 Eval compute in (compile_bexp (AND (LESSEQUAL (CONST 1) (VAR "x"))
                                    (LESSEQUAL (VAR "x") (CONST 10))) 0 10).
 
-(** Result: [ Iconst 1 :: Ivar "x" :: Ible 0 13 ::
-              Ivar "x" :: Iconst 10 :: Ible 0 10 :: nil ] *)
+(** Result: [:: Iconst 1%Z; Ivar "x"; Ible 0%Z 13%Z; Ivar "x";
+                Iconst 10%Z; Ible 0%Z 10%Z] *)
 
 Eval compute in (compile_bexp (OR (LESSEQUAL (CONST 1) (VAR "x"))
                                   (LESSEQUAL (VAR "x") (CONST 10))) 0 10).
 
-(** Result: [ Iconst 1 :: Ivar "x" :: Ible 3 0 ::
-              Ivar "x" :: Iconst 10 :: Ible 0 10 :: nil ] *)
+(** Result: [:: Iconst 1%Z; Ivar "x"; Ible 3%Z 0%Z; Ivar "x";
+                Iconst 10%Z; Ible 0%Z 10%Z] *)
 
 Eval compute in (compile_bexp (NOT (AND TRUE FALSE)) 12 34).
 
-(** Result: [ Ibranch 12 :: nil ] *)
+(** Result: [:: Ibranch 12%Z] *)
 
 (** Finally, here is the compilation of commands.  The code for a
     command [c] updates the store (the values of variables) as prescribed
@@ -256,9 +265,9 @@ Eval compute in (compile_bexp (NOT (AND TRUE FALSE)) 12 34).
 Fixpoint compile_com (c: com) : code :=
   match c with
   | SKIP =>
-      nil
+      [::]
   | ASSIGN x a =>
-      compile_aexp a ++ Isetvar x :: nil
+      compile_aexp a ++ [:: Isetvar x]
   | SEQ c1 c2 =>
       compile_com c1 ++ compile_com c2
   | IFTHENELSE b ifso ifnot =>
@@ -273,29 +282,29 @@ Fixpoint compile_com (c: com) : code :=
       let code_test := compile_bexp b 0 (codelen code_body + 1) in
       code_test
       ++ code_body
-      ++ Ibranch (- (codelen code_test + codelen code_body + 1)) :: nil
+      ++ [:: Ibranch (- (codelen code_test + codelen code_body + 1))]
   end.
 
 (** The code for a whole program [p] (a command) is similar, but terminates
     cleanly on an [Ihalt] instruction. *)
 
 Definition compile_program (p: com) : code :=
-  compile_com p ++ Ihalt :: nil.
+  compile_com p ++ [:: Ihalt].
 
 (** Examples of compilation: *)
 
 Eval compute in (compile_program (ASSIGN "x" (PLUS (VAR "x") (CONST 1)))).
 
-(** Result: [ Ivar "x" :: Iconst 1 :: Iadd :: Isetvar "x" :: Ihalt :: nil ] *)
+(** Result: [:: Ivar "x"; Iconst 1%Z; Iadd; Isetvar "x"; Ihalt] *)
 
 Eval compute in (compile_program (WHILE TRUE SKIP)).
 
-(** Result: [ Ibranch (-1) :: Ihalt :: nil ]. *)
+(** Result: [:: Ibranch (-1)%Z; Ihalt]. *)
 
 Eval compute in (compile_program (IFTHENELSE (EQUAL (VAR "x") (CONST 1)) (ASSIGN "x" (CONST 0)) SKIP)).
 
-(** Result: [ Ivar "x" :: Iconst 1 :: Ibeq 0 3 ::
-              Iconst 0 :: Isetvar "x" :: Ibranch 0 :: Ihalt :: nil ]. *)
+(** Result: [:: Ivar "x"; Iconst 1%Z; Ibeq 0%Z 3%Z; Iconst 0%Z;
+                Isetvar "x"; Ibranch 0%Z; Ihalt]. *)
 
 (** *** Exercise (1 star) *)
 
@@ -303,8 +312,8 @@ Eval compute in (compile_program (IFTHENELSE (EQUAL (VAR "x") (CONST 1)) (ASSIGN
     [IFTHENELSE b c SKIP].  How would you change [compile_com]
     to generate better code?  Hint: the following function could be useful. *)
 
-Definition smart_Ibranch (d: Z) : code :=
-  if d =? 0 then nil else Ibranch d :: nil.
+Definition smart_Ibranch (d: int) : code :=
+  if d == 0 then [::] else [:: Ibranch d].
 
 (** ** 2.3.  Correctness of the compiled code for expressions *)
 
@@ -313,112 +322,102 @@ Definition smart_Ibranch (d: Z) : code :=
     sequence [C = C1 ++ C2 ++ C3].  The following predicate
     [code_at C pc C2] does just this. *)
 
-Inductive code_at: code -> Z -> code -> Prop :=
+Inductive code_at: code -> int -> code -> Prop :=
   | code_at_intro: forall C1 C2 C3 pc,
       pc = codelen C1 ->
       code_at (C1 ++ C2 ++ C3) pc C2.
 
 (** We show a number of useful lemmas about [instr_at] and [code_at]. *)
 
-Lemma codelen_cons:
-  forall i c, codelen (i :: c) = codelen c + 1.
+Lemma codelen_cons i c : codelen (i :: c) = codelen c + 1.
 Proof.
-  unfold codelen; intros; cbn; lia.
+by rewrite /codelen /= -addn1.
 Qed.
 
-Lemma codelen_app:
-  forall c1 c2, codelen (c1 ++ c2) = codelen c1 + codelen c2.
+Lemma codelen_app c1 c2 :
+  codelen (c1 ++ c2) = codelen c1 + codelen c2.
 Proof.
-  induction c1; intros. 
-- auto.
-- cbn [app]. rewrite ! codelen_cons. rewrite IHc1. lia.
+elim: c1=>//= c c1 IH.
+by rewrite !codelen_cons IH addrAC.
 Qed.
 
-Lemma instr_at_app:
-  forall i c2 c1 pc,
+Lemma instr_at_app i c2 c1 pc :
   pc = codelen c1 ->
   instr_at (c1 ++ i :: c2) pc = Some i.
 Proof.
-  induction c1; simpl; intros; subst pc.
-- auto.
-- assert (A: codelen (a :: c1) =? 0 = false). 
-  { apply Z.eqb_neq. unfold codelen. cbn [length]. lia. }
-  rewrite A. rewrite codelen_cons. apply IHc1. lia.
+elim: c1 pc=>/= [|a c1 IH] pc -> //=.
+rewrite codelen_cons -addrA subrr addr0.
+by apply: IH.
 Qed.
 
-Lemma code_at_head:
-  forall C pc i C',
+Lemma code_at_head C pc i C' :
   code_at C pc (i :: C') ->
   instr_at C pc = Some i.
 Proof.
-  intros. inversion H. simpl. apply instr_at_app. auto.
+move=>H; case E: _ / H; rewrite -E /=.
+by apply: instr_at_app.
 Qed.
 
-Lemma code_at_tail:
-  forall C pc i C',
+Lemma code_at_tail C pc i C' :
   code_at C pc (i :: C') ->
   code_at C (pc + 1) C'.
 Proof.
-  intros. inversion H. 
-  change (C1 ++ (i :: C') ++ C3)
-    with (C1 ++ (i :: nil) ++ C' ++ C3).
-  rewrite <- app_ass. constructor. rewrite codelen_app. subst pc. auto.
-Qed. 
+move=>H; case E: _ / H => [C1 C2 C3 _ ->].
+rewrite -{C2}E /= -cat1s catA; apply: code_at_intro.
+by rewrite codelen_app.
+Qed.
 
-Lemma code_at_app_left:
-  forall C pc C1 C2,
+Lemma code_at_app_left C pc C1 C2 :
   code_at C pc (C1 ++ C2) ->
   code_at C pc C1.
 Proof.
-  intros. inversion H. rewrite app_ass. constructor. auto.
+move=>H; case E: _ / H => [C3 C4 C5 {}pc E'].
+by rewrite -{C4}E -catA; apply: code_at_intro.
 Qed.
 
-Lemma code_at_app_right:
-  forall C pc C1 C2,
+Lemma code_at_app_right C pc C1 C2 :
   code_at C pc (C1 ++ C2) ->
   code_at C (pc + codelen C1) C2.
 Proof.
-  intros. inversion H. rewrite app_ass. rewrite <- app_ass.
-  constructor. rewrite codelen_app. subst pc. auto.
+move=>H; case E: _ / H => [C3 C4 C5 _ ->].
+rewrite -{C4}E -catA catA; apply: code_at_intro.
+by rewrite codelen_app.
 Qed.
 
-Lemma code_at_app_right2:
-  forall C pc C1 C2 C3,
+Lemma code_at_app_right2 C pc C1 C2 C3 :
   code_at C pc (C1 ++ C2 ++ C3) ->
   code_at C (pc + codelen C1) C2.
 Proof.
-  intros. apply code_at_app_right. apply code_at_app_left with (C2 := C3).
-  rewrite app_ass; auto. 
+move=>H; case E: _ / H => [C4 C5 C6 {}pc E'].
+apply/code_at_app_right/(@code_at_app_left _ _ _ C3).
+by rewrite -catA -{C5}E.
 Qed.
 
-Lemma code_at_nil:
-  forall C pc C1,
-  code_at C pc C1 -> code_at C pc nil.
+Lemma code_at_nil C pc C1 :
+  code_at C pc C1 -> code_at C pc [::].
 Proof.
-  intros. inversion H. subst. change (C1 ++ C3) with (nil ++ C1 ++ C3).
-  constructor. auto.
+case=>{}C {}C1 C2 _ ->.
+by rewrite (_ : C1 ++ C2 = [::] ++ (C1 ++ C2)).
 Qed.
 
-Lemma instr_at_code_at_nil:
-  forall C pc i, instr_at C pc = Some i -> code_at C pc nil.
+Lemma instr_at_code_at_nil C pc i :
+  instr_at C pc = Some i -> code_at C pc [::].
 Proof.
-  induction C; cbn; intros.
-- discriminate.
-- destruct (pc =? 0) eqn:PC.
-+ assert (pc = 0) by (apply Z.eqb_eq; auto). subst pc. 
-  change (a :: C) with (nil ++ nil ++ (a :: C)). constructor. auto.
-+ assert (A: code_at C (pc - 1) nil) by eauto.
-  inversion A; subst.
-  apply code_at_intro with (C1 := a :: C1) (C3 := C3).
-  rewrite codelen_cons. lia.
+elim: C pc=>//= a C IH pc.
+case: eqP=>[->|Hn].
+- case=>{a}->.
+  by rewrite (_ : i :: C = [::] ++ [::] ++ (i :: C)).
+move/IH=>H; case: {1}_ {1}_ {1}_ / H (@erefl _ (pc - 1)) (@erefl code nil)=>C1 _ C2 _ -> E ->.
+rewrite -cat_cons; apply: code_at_intro.
+by rewrite codelen_cons E -addrA subrr addr0.
 Qed.
 
 (** We put these lemmas in a "hint database" so that Coq can use them
     automatically. *)
 
-Hint Resolve code_at_head code_at_tail code_at_app_left code_at_app_right
-             code_at_app_right2 code_at_nil instr_at_code_at_nil: code.
-Hint Rewrite codelen_app codelen_cons Z.add_assoc Z.add_0_r : code.
+#[global] Hint Resolve code_at_head code_at_tail code_at_app_left code_at_app_right
+                       code_at_app_right2 code_at_nil instr_at_code_at_nil : code.
+#[global] Hint Rewrite codelen_app codelen_cons addrA addr0 : code.
 
 (** Remember the informal specification we gave for the code generated
     for an arithmetic expression [a].  It should
@@ -429,36 +428,28 @@ Hint Rewrite codelen_app codelen_cons Z.add_assoc Z.add_0_r : code.
     We now prove that the code [compile_aexp a] fulfills this contract.
     The proof is a nice induction on the structure of [a]. *)
 
-Lemma compile_aexp_correct:
-  forall C s a pc σ,
+Lemma compile_aexp_correct C s a pc σ :
   code_at C pc (compile_aexp a) ->
   transitions C
        (pc, σ, s)
        (pc + codelen (compile_aexp a), aeval a s :: σ, s).
 Proof.
-  induction a; simpl; intros.
-
+elim: a pc σ=>/= [n|x|a1 IH1 a2 IH2|a1 IH1 a2 IH2] pc σ H.
 - (* CONST *)
-  apply star_one. apply trans_const. eauto with code. 
-
+  by apply/star_one/trans_const; eauto with code.
 - (* VAR *)
-  apply star_one. apply trans_var. eauto with code. 
-
+  by apply/star_one/trans_var; eauto with code.
 - (* PLUS *)
-  eapply star_trans. apply IHa1. eauto with code.
-  eapply star_trans. apply IHa2. eauto with code.
-  apply star_one. autorewrite with code. apply trans_add. eauto with code.
-
-- (* MINUS *)
-  eapply star_trans. apply IHa1. eauto with code.
-  eapply star_trans. apply IHa2. eauto with code.
-  eapply star_trans.
-  apply star_one. apply trans_opp. eauto with code.
-  apply star_one.
-  replace (aeval a1 s - aeval a2 s) 
-     with (aeval a1 s + (- aeval a2 s))
-       by lia.
-  autorewrite with code. apply trans_add. eauto with code.
+  apply: star_trans; first by apply IH1; eauto with code.
+  apply: star_trans; first by apply: IH2; eauto with code.
+  apply: star_one; autorewrite with code.
+  by apply: trans_add; eauto with code.
+(* MINUS *)
+apply: star_trans; first by apply IH1; eauto with code.
+apply: star_trans; first by apply: IH2; eauto with code.
+apply: star_trans.
+- by apply/star_one/trans_opp; eauto with code.
+by apply: star_one; autorewrite with code; apply: trans_add; eauto with code.
 Qed.
 
 (** The proof for the compilation of Boolean expressions is similar.
@@ -470,58 +461,51 @@ Qed.
   - leave the store unchanged.
 *)
 
-Lemma compile_bexp_correct:
-  forall C s b d1 d0 pc σ,
+Lemma compile_bexp_correct C s b d1 d0 pc σ :
   code_at C pc (compile_bexp b d1 d0) ->
   transitions C
        (pc, σ, s)
        (pc + codelen (compile_bexp b d1 d0) + (if beval b s then d1 else d0), σ, s).
 Proof.
-  induction b; cbn; intros.
-
+elim: b d1 d0 pc=>/=.
 - (* TRUE *)
-  destruct (d1 =? 0) eqn:Z.
-  + (* zero displacement: no instruction generated *)
-    assert (d1 = 0) by (apply Z.eqb_eq; auto). subst d1.
-    autorewrite with code. apply star_refl.
-  + (* a branch is generated *)
-    apply star_one. apply trans_branch with (d := d1). eauto with code. auto.
-
+  move=>d1 _ pc; case: eqP=>[->|Hn].
+  - (* zero displacement: no instruction generated *)
+    by move=>_; autorewrite with code; apply: star_refl.
+  - (* a branch is generated *)
+    move=>H; apply: star_one.
+    by apply: (@trans_branch _ _ _ _ d1); eauto with code.
 - (* FALSE *)
-  destruct (d0 =? 0) eqn:Z.
+  move=>_ d0 pc; case: eqP=>[->|Hn].
   + (* zero displacement: no instruction generated *)
-    assert (d0 = 0) by (apply Z.eqb_eq; auto). subst d0.
-    autorewrite with code. apply star_refl.
+    by move=>_; autorewrite with code; apply: star_refl.
   + (* a branch is generated *)
-    apply star_one. apply trans_branch with (d := d0). eauto with code. auto.
-
+    move=>H; apply: star_one.
+    by apply: (@trans_branch _ _ _ _ d0); eauto with code.
 - (* EQUAL *)
-  eapply star_trans. apply compile_aexp_correct with (a := a1). eauto with code.
-  eapply star_trans. apply compile_aexp_correct with (a := a2). eauto with code.
-  apply star_one. apply trans_beq with (d1 := d1) (d0 := d0). eauto with code.
-  autorewrite with code. auto.
-
+  move=>a1 a2 d1 d0 pc H.
+  apply: star_trans; first by apply: (@compile_aexp_correct _ _ a1); eauto with code.
+  apply: star_trans; first by apply: (@compile_aexp_correct _ _ a2); eauto with code.
+  apply: star_one; apply: (@trans_beq _ _ _ _ d1 d0); first by eauto with code.
+  by autorewrite with code.
 - (* LESSEQUAL *)
-  eapply star_trans. apply compile_aexp_correct with (a := a1). eauto with code.
-  eapply star_trans. apply compile_aexp_correct with (a := a2). eauto with code.
-  apply star_one. apply trans_ble with (d1 := d1) (d0 := d0). eauto with code.
-  autorewrite with code. auto.
-
+  move=>a1 a2 d1 d0 pc H.
+  apply: star_trans; first by apply: (@compile_aexp_correct _ _ a1); eauto with code.
+  apply: star_trans; first by apply: (@compile_aexp_correct _ _ a2); eauto with code.
+  apply: star_one; apply: (@trans_ble _ _ _ _ d1 d0); first by eauto with code.
+  by autorewrite with code.
 - (* NOT *)
-  replace (if negb (beval b s) then d1 else d0)
-     with (if beval b s then d0 else d1).
-  apply IHb. auto. 
-  destruct (beval b s); auto.
-
-- (* AND *)
-  set (code2 := compile_bexp b2 d1 d0) in *.
-  set (code1 := compile_bexp b1 0 (codelen code2 + d0)) in *.
-  eapply star_trans. apply IHb1. eauto with code.
-  fold code1. destruct (beval b1 s); cbn.
-  + (* b1 evaluates to true, the code for b2 is executed *)
-    autorewrite with code. apply IHb2. eauto with code.
-  + (* b1 evaluates to false, the code for b2 is skipped *)
-    autorewrite with code. apply star_refl.
+  by move=>b + d1 d0; case: (beval b s)=>/=; apply.
+(* AND *)
+move=>b1 IH1 b2 IH2 d1 d0 pc H.
+apply: star_trans; first by apply: IH1; eauto with code.
+set code2 := compile_bexp b2 d1 d0 in H *.
+set code1 := compile_bexp b1 0 (codelen code2 + d0) in H *.
+case: (beval b1 s)=>/=.
+- (* b1 evaluates to true, the code for b2 is executed *)
+  by autorewrite with code; apply: IH2; eauto with code.
+(* b1 evaluates to false, the code for b2 is skipped *)
+by autorewrite with code; apply: star_refl.
 Qed.
 
 (** ** 2.4.  Correctness of generated code for terminating commands *)
@@ -534,13 +518,12 @@ Qed.
 
     To characterize the termination of command [c], we use IMP's natural
     semantics, with its predicate [exec s c s'].
-    The proof is a simple induction over the derivation of this 
+    The proof is a simple induction over the derivation of this
     [exec s c s'] execution.  An induction on the structure of command [c]
     would not suffice in the case of loops.
 *)
 
-Lemma compile_com_correct_terminating:
-  forall s c s',
+Lemma compile_com_correct_terminating s c s' :
   cexec s c s' ->
   forall C pc σ,
   code_at C pc (compile_com c) ->
@@ -548,85 +531,87 @@ Lemma compile_com_correct_terminating:
       (pc, σ, s)
       (pc + codelen (compile_com c), σ, s').
 Proof.
-  induction 1; cbn; intros.
-
+elim=>/=.
 - (* SKIP *)
-  autorewrite with code. apply star_refl.
-
+  move=>s1 C pc σ H.
+  by autorewrite with code; apply: star_refl.
 - (* ASSIGN *)
-  eapply star_trans. apply compile_aexp_correct with (a := a). eauto with code. 
-  apply star_one. autorewrite with code. apply trans_setvar. eauto with code.
-
-- (* SEQUENCE *) 
-  eapply star_trans.
-  apply IHcexec1. eauto with code.
-  autorewrite with code. apply IHcexec2. eauto with code.
-
+  move=>s1 x a C pc σ H.
+  apply: star_trans; first by apply: (@compile_aexp_correct _ _ a); eauto with code.
+  apply: star_one; autorewrite with code.
+  by apply: trans_setvar; eauto with code.
+- (* SEQUENCE *)
+  move=>c1 c2 s1 s2 s3 H1 IH1 H2 IH2 C pc σ H.
+  apply: star_trans; first by apply IH1; eauto with code.
+  by autorewrite with code; apply: IH2; eauto with code.
 - (* IFTHENELSE *)
-  set (code1 := compile_com c1) in *.
-  set (code2 := compile_com c2) in *.
-  set (codeb := compile_bexp b 0 (codelen code1 + 1)) in *.
-  eapply star_trans.
-  apply compile_bexp_correct with (b := b). eauto with code.
-  fold codeb. destruct (beval b s); autorewrite with code.
-  + (* the "then" branch is executed *)
-    eapply star_trans. apply IHcexec. eauto with code.
-    fold code1. apply star_one. apply trans_branch with (d := codelen code2). eauto with code. lia.
-  + (* the "else" branch is executed *)
-    replace (pc + codelen codeb + codelen code1 + codelen code2 + 1)
-       with (pc + codelen codeb + codelen code1 + 1 + codelen code2) by lia.
-    apply IHcexec. eauto with code.
-
+  move=>b c1 c2 s1 s2 H IH C pc σ.
+  set code1 := compile_com c1.
+  set code2 := compile_com c2.
+  set codeb := compile_bexp b 0 (codelen code1 + 1).
+  move=>H2; apply: star_trans.
+  - by apply: (@compile_bexp_correct _ _ b); eauto with code.
+  rewrite -/codeb; case: (beval b s1) in IH *; autorewrite with code.
+  - (* the "then" branch is executed *)
+    apply: star_trans; first by apply: IH; eauto with code.
+    rewrite -/code1; apply: star_one.
+    apply: (@trans_branch _ _ _ _ (codelen code2)); first by eauto with code.
+    by rewrite addrAC.
+  (* the "else" branch is executed *)
+  rewrite [X in star _ _ ((X, _), _)]addrAC.
+  by apply: IH; eauto with code.
 - (* WHILE stop *)
-  set (code_body := compile_com c) in *.
-  set (code_branch := compile_bexp b 0 (codelen code_body + 1)) in *.
-  set (d := - (codelen code_branch + codelen code_body + 1)) in *.
-  eapply star_trans. apply compile_bexp_correct with (b := b). eauto with code.
-  rewrite H. fold code_branch. autorewrite with code. apply star_refl. 
-
-- (* WHILE loop *)
-  set (code_body := compile_com c) in *.
-  set (code_branch := compile_bexp b 0 (codelen code_body + 1)) in *.
-  set (d := - (codelen code_branch + codelen code_body + 1)) in *.
-  eapply star_trans. apply compile_bexp_correct with (b := b). eauto with code.
-  rewrite H. fold code_branch. autorewrite with code.
-  eapply star_trans. apply IHcexec1. eauto with code.
-  eapply star_trans.
-  apply star_one. apply trans_branch with (d := d). eauto with code. eauto.
-  replace (pc + codelen code_branch + codelen code_body + 1 + d)
-     with pc
-       by lia.
-  replace (pc + codelen code_branch + codelen code_body + 1)
-     with (pc + codelen (compile_com (WHILE b c)))
-       by (cbn; autorewrite with code; auto).
-  apply IHcexec2. auto.
+  move=>b c1 s1 Hb C pc σ.
+  set code_body := compile_com c1.
+  set code_branch := compile_bexp b 0 (codelen code_body + 1).
+  set d := - (codelen code_branch + codelen code_body + 1).
+  move=>H; apply: star_trans.
+  - by apply: (@compile_bexp_correct _ _ b); eauto with code.
+  rewrite (negbTE Hb) -/code_branch; autorewrite with code.
+  by apply: star_refl.
+(* WHILE loop *)
+move=>b c1 s1 s2 s3 Hb H1.
+set code_body := compile_com c1.
+move=>IH1 H2.
+set code_branch := compile_bexp b 0 (codelen code_body + 1).
+set d := - (codelen code_branch + codelen code_body + 1).
+move=>IH2 C pc σ H.
+apply: star_trans.
+- by apply: (@compile_bexp_correct _ _ b); eauto with code.
+rewrite Hb -/code_branch; autorewrite with code.
+apply: star_trans; first by apply: IH1; eauto with code.
+apply: star_trans.
+- apply: star_one.
+  by apply: (@trans_branch _ _ _ _ d); first by eauto with code.
+rewrite [X in star _ ((X, _), _) _](ACl (1*(2*3*4*5))%AC) /= subrr addr0.
+rewrite (_ : pc + codelen code_branch + codelen code_body + 1 =
+             pc + codelen (compile_com (WHILE b c1))); last first.
+- by rewrite /=; autorewrite with code.
+by apply: IH2.
 Qed.
 
 (** As a corollary, we obtain the correctness of the compiled code for
     a whole program [p], in the case where the execution of [p] terminates. *)
 
-Theorem compile_program_correct_terminating:
-  forall s c s',
+Corollary compile_program_correct_terminating s c s' :
   cexec s c s' ->
   machine_terminates (compile_program c) s s'.
 Proof.
-  intros.
-  set (C := compile_program c).
-  assert (CODEAT: code_at C 0 (compile_com c ++ Ihalt :: nil)).
-  { replace C with (nil ++ compile_program c ++ nil).
-    apply code_at_intro. auto.
-    rewrite app_nil_r; auto. }
-  unfold machine_terminates.
-  exists (0 + codelen (compile_com c)); split.
-- apply compile_com_correct_terminating. auto. eauto with code.
-- eauto with code.
+move=>H; set C := compile_program c.
+have CODEAT: code_at C 0 (compile_com c ++ Ihalt :: [::]).
+- rewrite (_ : C = [::] ++ compile_program c ++ [::]) //.
+  by rewrite cats0.
+rewrite /machine_terminates.
+exists (0 + codelen (compile_com c)); split.
+- by apply: compile_com_correct_terminating=>//; eauto with code.
+by eauto with code.
 Qed.
 
 (** *** Exercise (2 stars) *)
 
 (** In a previous exercise, we modified [compile_com] to use
     [smart_Ibranch] instead of [Ibranch], producing more efficient code.
-    Now, please update the proof of [compile_com_correct_terminating] 
+    Now, please update the proof of [compile_com_correct_terminating]
     to take this modification into account.
     Hint: first, show the following lemma. *)
 
@@ -698,7 +683,7 @@ Abort.
     there are instructions that perform the computations described in [k]
     and reach an [Ihalt] instruction. *)
 
-Inductive compile_cont (C: code): cont -> Z -> Prop :=
+Inductive compile_cont (C: code): cont -> int -> Prop :=
   | ccont_stop: forall pc,
       instr_at C pc = Some Ihalt ->
       compile_cont C Kstop pc
@@ -720,11 +705,13 @@ Inductive compile_cont (C: code): cont -> Z -> Prop :=
       compile_cont C k pc' ->
       compile_cont C k pc.
 
+Derive Signature for compile_cont.
+
 (** Then, a configuration [(c, k, s)] of the small-step semantics
     matches a configuration [(C, pc, σ, s')] of the machine if the
     following conditions hold:
   - The stores are identical: [s' = s].
-  - The machine stack is empty: [σ = nil].
+  - The machine stack is empty: [σ = [::]].
   - The machine code at point [pc] is the compiled code for [c]:
     [code_at C pc (compile_com c)].
   - The machine code at point [pc + codelen (compile_com c)] matches
@@ -735,7 +722,7 @@ Inductive match_config (C: code): com * cont * store -> config -> Prop :=
   | match_config_intro: forall c k st pc,
       code_at C pc (compile_com c) ->
       compile_cont C k (pc + codelen (compile_com c)) ->
-      match_config C (c, k, st) (pc, nil, st).
+      match_config C (c, k, st) (pc, [::], st).
 
 (** We are now ready to prove the expected simulation property.
     Since some transitions in the source command correspond to zero
@@ -749,7 +736,7 @@ Inductive match_config (C: code): com * cont * store -> config -> Prop :=
        |                                   |
        v                                   v
     c' / k' / st' ----------------------- machconfig'
-                      match_config 
+                      match_config
 >>
     Note the stronger conclusion on the right:
   - either the virtual machine does one or several transitions
@@ -779,73 +766,75 @@ Fixpoint com_size (c: com) : nat :=
   | WHILE b c1 => (com_size c1 + 1)%nat
   end.
 
-Remark com_size_nonzero: forall c, (com_size c > 0)%nat.
+Remark com_size_nonzero  c : (com_size c > 0)%N.
 Proof.
-  induction c; cbn; lia.
+elim: c=>//= [c1 _ c2 _|_ c1 _ c2 _|_ c1 _];
+by apply: ltn_addl.
 Qed.
 
 Fixpoint cont_size (k: cont) : nat :=
   match k with
-  | Kstop => 0%nat
-  | Kseq c k' => (com_size c + cont_size k')%nat
+  | Kstop => 0%N
+  | Kseq c k' => (com_size c + cont_size k')%N
   | Kwhile b c k' => cont_size k'
   end.
 
 Definition measure (impconf: com * cont * store) : nat :=
-  match impconf with (c, k, m) => (com_size c + cont_size k)%nat end.
+  let: (c, k, _) := impconf in (com_size c + cont_size k)%N.
 
 (** We will need some inversion lemmas for the [compile_cont] predicate. *)
 
-Lemma compile_cont_Kstop_inv:
-  forall C pc s,
+Lemma compile_cont_Kstop_inv C pc s :
   compile_cont C Kstop pc ->
   exists pc',
-  star (transition C) (pc, nil, s) (pc', nil, s)
+  star (transition C) (pc, [::], s) (pc', [::], s)
   /\ instr_at C pc' = Some Ihalt.
 Proof.
-  intros. dependent induction H. 
-- exists pc; split. apply star_refl. auto.
-- destruct IHcompile_cont as (pc'' & A & B); auto.
-  exists pc''; split; auto. 
-  eapply star_step; eauto. eapply trans_branch; eauto. 
+move=>H; depind H=>//.
+- by exists pc; split=>//; apply: star_refl.
+case: (IHcompile_cont s)=>pc'' [A B]; exists pc''; split=>//.
+apply: (@star_step _ _ _ _ _ _ A).
+by apply: (trans_branch _ _ _ _ _ _ H).
 Qed.
 
-Lemma compile_cont_Kseq_inv:
-  forall C c k pc s,
+Lemma compile_cont_Kseq_inv C c k pc s :
   compile_cont C (Kseq c k) pc ->
   exists pc',
-  star (transition C) (pc, nil, s) (pc', nil, s)
+  star (transition C) (pc, [::], s) (pc', [::], s)
   /\ code_at C pc' (compile_com c)
   /\ compile_cont C k (pc' + codelen(compile_com c)).
 Proof.
-  intros. dependent induction H. 
-- exists pc; split. apply star_refl. split; congruence. 
-- edestruct IHcompile_cont as (pc'' & A & B). eauto.
-  exists pc''; split; auto.
-  eapply star_step; eauto. eapply trans_branch; eauto. 
+move=>H; depind H=>//.
+- case: H2=>{c0}->{k0}->.
+  exists pc; do!split=>//; first by apply star_refl.
+  by rewrite -H0.
+case: (IHcompile_cont s)=>pc'' [A B].
+exists pc''; split=>//.
+apply: (@star_step _ _ _ _ _ _ A).
+by apply: (@trans_branch _ _ _ _ _ _ H).
 Qed.
 
 Lemma compile_cont_Kwhile_inv:
   forall C b c k pc s,
   compile_cont C (Kwhile b c k) pc ->
   exists pc',
-  plus (transition C) (pc, nil, s) (pc', nil, s)
+  plus (transition C) (pc, [::], s) (pc', [::], s)
   /\ code_at C pc' (compile_com (WHILE b c))
   /\ compile_cont C k (pc' + codelen(compile_com (WHILE b c))).
 Proof.
   intros. dependent induction H.
 - exists (pc + 1 + d); split.
-  apply plus_one. eapply trans_branch; eauto. 
+  apply plus_one. eapply trans_branch; eauto.
   split; congruence.
 - edestruct IHcompile_cont as (pc'' & A & B & D). eauto.
   exists pc''; split; auto.
-  eapply plus_left. eapply trans_branch; eauto. apply plus_star; auto. 
+  eapply plus_left. eapply trans_branch; eauto. apply plus_star; auto.
 Qed.
 
 Lemma match_config_skip:
   forall C k s pc,
   compile_cont C k pc ->
-  match_config C (SKIP, k, s) (pc, nil, s).
+  match_config C (SKIP, k, s) (pc, [::], s).
 Proof.
   intros. constructor.
 - cbn. inversion H; eauto with code.
@@ -867,7 +856,7 @@ Proof.
 
 - (* assign *)
   econstructor; split.
-+ left. eapply plus_right. eapply compile_aexp_correct; eauto with code. 
++ left. eapply plus_right. eapply compile_aexp_correct; eauto with code.
   eapply trans_setvar; eauto with code.
 + autorewrite with code in *. apply match_config_skip. auto.
 
@@ -875,7 +864,7 @@ Proof.
   econstructor; split.
 + right; split. apply star_refl. lia.
 + autorewrite with code in *. constructor. eauto with code.
-  eapply ccont_seq; eauto with code. 
+  eapply ccont_seq; eauto with code.
 
 - (* if *)
   set (code1 := compile_com c1) in *.
@@ -884,11 +873,11 @@ Proof.
   autorewrite with code in *.
   econstructor; split.
 + right; split.
-  apply compile_bexp_correct with (b := b). eauto with code. 
+  apply compile_bexp_correct with (b := b). eauto with code.
   destruct (beval b s); lia.
 + fold codeb. destruct (beval b s).
   * autorewrite with code. constructor. eauto with code.
-    eapply ccont_branch. eauto with code. eauto. 
+    eapply ccont_branch. eauto with code. eauto.
     fold code1.
     replace (pc + codelen codeb + codelen code1 + 1 + codelen code2)
        with (pc + codelen codeb + codelen code1 + codelen code2 + 1) by lia.
@@ -906,7 +895,7 @@ Proof.
 + right; split.
   apply compile_bexp_correct with (b := b). eauto with code.
   assert (com_size c > 0)%nat by apply com_size_nonzero. lia.
-+ rewrite H. fold codeb. autorewrite with code in *. 
++ rewrite H. fold codeb. autorewrite with code in *.
   apply match_config_skip. auto.
 
 - (* while loop *)
@@ -916,23 +905,23 @@ Proof.
 + right; split.
   apply compile_bexp_correct with (b := b). eauto with code.
   lia.
-+ rewrite H. fold codeb. autorewrite with code in *. 
++ rewrite H. fold codeb. autorewrite with code in *.
   constructor. eauto with code.
   eapply ccont_while with (pc' := pc). eauto with code. fold codec. lia.
   auto.
-  cbn. fold codec; fold codeb. eauto. 
+  cbn. fold codec; fold codeb. eauto.
   autorewrite with code. auto.
 
 - (* skip seq *)
   autorewrite with code in *.
-  edestruct compile_cont_Kseq_inv as (pc' & X & Y & Z). eauto.
+  edestruct compile_cont_Kseq_inv as (pc' & X & Y & int). eauto.
   econstructor; split.
 + right; split. eauto. lia.
 + constructor; auto.
 
 - (* skip while *)
   autorewrite with code in *.
-  edestruct compile_cont_Kwhile_inv as (pc' & X & Y & Z). eauto.
+  edestruct compile_cont_Kwhile_inv as (pc' & X & Y & int). eauto.
   econstructor; split.
 + left. eauto.
 + constructor; auto.
@@ -948,14 +937,14 @@ Qed.
 
 Lemma match_initial_configs:
   forall c s,
-  match_config (compile_program c) (c, Kstop, s) (0, nil, s).
+  match_config (compile_program c) (c, Kstop, s) (0, [::], s).
 Proof.
   intros. set (C := compile_program c).
-  assert (code_at C 0 (compile_com c ++ Ihalt :: nil)).
-  { replace C with (nil ++ (compile_com c ++ Ihalt :: nil) ++ nil).
+  assert (code_at C 0 (compile_com c ++ Ihalt :: [::])).
+  { replace C with ([::] ++ (compile_com c ++ Ihalt :: [::]) ++ [::]).
     constructor; auto.
     rewrite app_nil_r; auto. }
-  constructor. 
+  constructor.
 - eauto with code.
 - apply ccont_stop. eauto with code.
 Qed.
@@ -967,8 +956,8 @@ Theorem compile_program_correct_terminating_2:
 Proof.
   intros. set (C := compile_program c).
   edestruct (simulation_star _ _ _ _ _ _ (simulation_step C)) as (ms & A & B).
-  eauto. apply match_initial_configs. 
-  inversion B; subst. 
+  eauto. apply match_initial_configs.
+  inversion B; subst.
   edestruct compile_cont_Kstop_inv as (pc' & D & E). eauto.
   exists pc'; split; auto.
   eapply star_trans. eauto. cbn in D; autorewrite with code in D. eauto.
