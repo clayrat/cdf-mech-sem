@@ -800,9 +800,9 @@ Qed.
 Lemma compile_cont_Kseq_inv C c k pc s :
   compile_cont C (Kseq c k) pc ->
   exists pc',
-  star (transition C) (pc, [::], s) (pc', [::], s)
-  /\ code_at C pc' (compile_com c)
-  /\ compile_cont C k (pc' + codelen(compile_com c)).
+  [/\ star (transition C) (pc, [::], s) (pc', [::], s),
+      code_at C pc' (compile_com c) &
+      compile_cont C k (pc' + codelen(compile_com c))].
 Proof.
 move=>H; depind H=>//.
 - case: H2=>{c0}->{k0}->.
@@ -814,117 +814,118 @@ apply: (@star_step _ _ _ _ _ _ A).
 by apply: (@trans_branch _ _ _ _ _ _ H).
 Qed.
 
-Lemma compile_cont_Kwhile_inv:
-  forall C b c k pc s,
+Lemma compile_cont_Kwhile_inv C b c k pc s :
   compile_cont C (Kwhile b c k) pc ->
   exists pc',
-  plus (transition C) (pc, [::], s) (pc', [::], s)
-  /\ code_at C pc' (compile_com (WHILE b c))
-  /\ compile_cont C k (pc' + codelen(compile_com (WHILE b c))).
+  [/\ plus (transition C) (pc, [::], s) (pc', [::], s),
+      code_at C pc' (compile_com (WHILE b c)) &
+      compile_cont C k (pc' + codelen(compile_com (WHILE b c)))].
 Proof.
-  intros. dependent induction H.
-- exists (pc + 1 + d); split.
-  apply plus_one. eapply trans_branch; eauto.
-  split; congruence.
-- edestruct IHcompile_cont as (pc'' & A & B & D). eauto.
-  exists pc''; split; auto.
-  eapply plus_left. eapply trans_branch; eauto. apply plus_star; auto.
+move=>H; depind H=>//.
+- case: H4=>{b0}->{c0}->{k0}->.
+  exists (pc + 1 + d); rewrite -H0 -H2; split=>//.
+  by apply/plus_one/(trans_branch _ _ _ _ _ _ H H0).
+case: (IHcompile_cont s)=>pc'' [A B D].
+exists pc''; do!split=>//.
+apply: plus_left; first by apply: (trans_branch _ _ _ _ _ _ H H0).
+by apply: plus_star.
 Qed.
 
-Lemma match_config_skip:
-  forall C k s pc,
+Lemma match_config_skip C k s pc :
   compile_cont C k pc ->
   match_config C (SKIP, k, s) (pc, [::], s).
 Proof.
-  intros. constructor.
-- cbn. inversion H; eauto with code.
-- cbn. autorewrite with code. auto.
+move=>H; constructor=>/=.
+- by case: H; eauto with code.
+by autorewrite with code.
 Qed.
 
 (** At last, we can state and prove the simulation diagram. *)
 
-Lemma simulation_step:
-  forall C impconf1 impconf2, step impconf1 impconf2 ->
+Lemma simulation_step C impconf1 impconf2 :
+  step impconf1 impconf2 ->
   forall machconf1, match_config C impconf1 machconf1 ->
   exists machconf2,
       (plus (transition C) machconf1 machconf2
        \/ (star (transition C) machconf1 machconf2
-           /\ (measure impconf2 < measure impconf1)%nat))
+           /\ (measure impconf2 < measure impconf1)%N))
    /\ match_config C impconf2 machconf2.
 Proof.
-  destruct 1; intros machconf1 MATCH; inversion MATCH; clear MATCH; subst; cbn in *.
-
+case=>[x a k s|c1 c2 s k|b c1 c2 k s|b c k s Hb|b c k s Hb|c k s|b c k s] mc1 M.
 - (* assign *)
-  econstructor; split.
-+ left. eapply plus_right. eapply compile_aexp_correct; eauto with code.
-  eapply trans_setvar; eauto with code.
-+ autorewrite with code in *. apply match_config_skip. auto.
-
+  case: {1}_ _ / M (@erefl _ (ASSIGN x a, k, s))=>c1 k1 _ pc H H2 [E1 E2 ->];
+  rewrite {c1}E1 {k1}E2 /= in H H2.
+  exists (pc + codelen (compile_aexp a) + 1, [::], update x (aeval a s) s); split.
+  - left; apply: plus_right; first by apply: compile_aexp_correct; eauto with code.
+    apply: trans_setvar; eauto with code.
+  by autorewrite with code in H2; apply: match_config_skip.
 - (* seq *)
-  econstructor; split.
-+ right; split. apply star_refl. lia.
-+ autorewrite with code in *. constructor. eauto with code.
-  eapply ccont_seq; eauto with code.
-
+  case: {1}_ _ / M (@erefl _ (c1;;c2, k, s))=>c3 k1 st pc H H2 [E1 E2 ->];
+  rewrite {c3}E1 {k1}E2 /= in H H2.
+  exists (pc, [::], s); split=>/=.
+  - right; split; first by apply: star_refl.
+    by rewrite addnAC addnA addn1.
+  autorewrite with code in H2; constructor; eauto with code.
+  by apply: ccont_seq; eauto with code.
 - (* if *)
-  set (code1 := compile_com c1) in *.
-  set (codeb := compile_bexp b 0 (codelen code1 + 1)) in *.
-  set (code2 := compile_com c2) in *.
-  autorewrite with code in *.
-  econstructor; split.
-+ right; split.
-  apply compile_bexp_correct with (b := b). eauto with code.
-  destruct (beval b s); lia.
-+ fold codeb. destruct (beval b s).
-  * autorewrite with code. constructor. eauto with code.
-    eapply ccont_branch. eauto with code. eauto.
-    fold code1.
-    replace (pc + codelen codeb + codelen code1 + 1 + codelen code2)
-       with (pc + codelen codeb + codelen code1 + codelen code2 + 1) by lia.
-    auto.
-  * autorewrite with code. constructor. eauto with code. auto.
-    fold code2.
-    replace (pc + codelen codeb + codelen code1 + 1 + codelen code2)
-       with (pc + codelen codeb + codelen code1 + codelen code2 + 1) by lia.
-    auto.
-
+  case: {1}_ _ / M (@erefl _ (IFTHENELSE b c1 c2, k, s))=>c3 k1 st pc H H2 [E1 E2 ->];
+  rewrite {c3}E1 {k1}E2 /= in H H2.
+  set code1 := compile_com c1 in H H2.
+  set codeb := compile_bexp b 0 (codelen code1 + 1) in H H2.
+  set code2 := compile_com c2 in H H2.
+  autorewrite with code in H2.
+  exists (pc + codelen (compile_bexp b 0 (codelen code1 + 1)) +
+            (if beval b s then 0 else codelen code1 + 1), [::], s); split=>/=.
+  - right; rewrite -/codeb; split.
+    - by apply: compile_bexp_correct; eauto with code.
+    by rewrite ltn_add2r addn1 ltnS; case: (beval b s); [apply: leq_addr | apply: leq_addl].
+  case: (beval b s).
+  - autorewrite with code; constructor; eauto with code.
+    by apply: ccont_branch; eauto with code; rewrite -/code1 -/codeb addrAC.
+  autorewrite with code; constructor; eauto with code.
+  by rewrite -/codeb -/code2 addrAC.
 - (* while stop *)
-  set (codec := compile_com c) in *.
-  set (codeb := compile_bexp b 0 (codelen codec + 1)) in *.
-  econstructor; split.
-+ right; split.
-  apply compile_bexp_correct with (b := b). eauto with code.
-  assert (com_size c > 0)%nat by apply com_size_nonzero. lia.
-+ rewrite H. fold codeb. autorewrite with code in *.
-  apply match_config_skip. auto.
-
+  case: {1}_ _ / M (@erefl _ (WHILE b c, k, s))=>c3 k1 st pc H H2 [E1 E2 ->];
+  rewrite {c3}E1 {k1}E2 /= in H H2.
+  set codec := compile_com c in H H2.
+  set codeb := compile_bexp b 0 (codelen codec + 1) in H H2.
+  exists (pc + codelen (compile_bexp b 0 (codelen codec + 1)) +
+            (if beval b s then 0 else codelen codec + 1), [::], s); split=>/=.
+  - right; split.
+    - by apply: compile_bexp_correct; rewrite -/codeb; eauto with code.
+    by rewrite ltn_add2r addn1 ltnS; apply: com_size_nonzero.
+  rewrite (negbTE Hb) -/codeb; autorewrite with code in *.
+  by apply: match_config_skip.
 - (* while loop *)
-  set (codec := compile_com c) in *.
-  set (codeb := compile_bexp b 0 (codelen codec + 1)) in *.
-  econstructor; split.
-+ right; split.
-  apply compile_bexp_correct with (b := b). eauto with code.
-  lia.
-+ rewrite H. fold codeb. autorewrite with code in *.
-  constructor. eauto with code.
-  eapply ccont_while with (pc' := pc). eauto with code. fold codec. lia.
-  auto.
-  cbn. fold codec; fold codeb. eauto.
-  autorewrite with code. auto.
-
+  case: {1}_ _ / M (@erefl _ (WHILE b c, k, s))=>c3 k1 st pc H H2 [E1 E2 ->];
+  rewrite {c3}E1 {k1}E2 /= in H H2.
+  set codec := compile_com c in H H2.
+  set codeb := compile_bexp b 0 (codelen codec + 1) in H H2.
+  exists (pc + codelen (compile_bexp b 0 (codelen codec + 1)) +
+           (if beval b s then 0 else codelen codec + 1), [::], s); split=>/=.
+  - right; split.
+    - by apply: compile_bexp_correct; rewrite -/codeb; eauto with code.
+    by rewrite ltn_add2r addn1 ltnS.
+  rewrite Hb -/codeb; autorewrite with code in *.
+  constructor; eauto with code.
+  apply: ccont_while; eauto with code; rewrite /= -/codeb -/codec.
+  - by rewrite (ACl (1*((2*3*4)*5))%AC) /= subrr addr0.
+  rewrite (ACl (1*((2*3*4)*5)*6)%AC) /= subrr addr0.
+  by autorewrite with code.
 - (* skip seq *)
-  autorewrite with code in *.
-  edestruct compile_cont_Kseq_inv as (pc' & X & Y & int). eauto.
-  econstructor; split.
-+ right; split. eauto. lia.
-+ constructor; auto.
-
-- (* skip while *)
-  autorewrite with code in *.
-  edestruct compile_cont_Kwhile_inv as (pc' & X & Y & int). eauto.
-  econstructor; split.
-+ left. eauto.
-+ constructor; auto.
+  case: {1}_ _ / M (@erefl _ (SKIP, Kseq c k, s))=>c3 k1 st pc H H2 [E1 E2 ->];
+  rewrite {c3}E1 {k1}E2 /= in H H2.
+  autorewrite with code in H2.
+  case: (compile_cont_Kseq_inv _ _ _ _ s H2)=>pc' [X Y int] /=.
+  exists (pc', [::], s); split; first by right.
+  by constructor.
+(* skip while *)
+case: {1}_ _ / M (@erefl _ (SKIP, Kwhile b c k, s))=>c3 k1 st pc H H2 [E1 E2 ->];
+rewrite {c3}E1 {k1}E2 /= in H H2.
+autorewrite with code in H2.
+case: (compile_cont_Kwhile_inv _ _ _ _ _ s H2)=>pc' [X Y int].
+exists (pc', [::], s); split=>/=; first by left.
+by constructor.
 Qed.
 
 (** The hard work is done!  Nice consequences will follow, using
@@ -935,32 +936,28 @@ Qed.
     the big-step semantics to characterize termination of the source
     program. *)
 
-Lemma match_initial_configs:
-  forall c s,
+Lemma match_initial_configs c s :
   match_config (compile_program c) (c, Kstop, s) (0, [::], s).
 Proof.
-  intros. set (C := compile_program c).
-  assert (code_at C 0 (compile_com c ++ Ihalt :: [::])).
-  { replace C with ([::] ++ (compile_com c ++ Ihalt :: [::]) ++ [::]).
-    constructor; auto.
-    rewrite app_nil_r; auto. }
-  constructor.
-- eauto with code.
-- apply ccont_stop. eauto with code.
+set C := compile_program c.
+have H: code_at C 0 (compile_com c ++ [::Ihalt]).
+- rewrite (_ : C  = [::] ++ (compile_com c ++ [:: Ihalt]) ++ [::]) //.
+  by rewrite cats0.
+constructor; first by eauto with code.
+by apply: ccont_stop; eauto with code.
 Qed.
 
-Theorem compile_program_correct_terminating_2:
-  forall c s s',
+Theorem compile_program_correct_terminating_2 c s s' :
   star step (c, Kstop, s) (SKIP, Kstop, s') ->
   machine_terminates (compile_program c) s s'.
 Proof.
-  intros. set (C := compile_program c).
-  edestruct (simulation_star _ _ _ _ _ _ (simulation_step C)) as (ms & A & B).
-  eauto. apply match_initial_configs.
-  inversion B; subst.
-  edestruct compile_cont_Kstop_inv as (pc' & D & E). eauto.
-  exists pc'; split; auto.
-  eapply star_trans. eauto. cbn in D; autorewrite with code in D. eauto.
+move=>H; set C := compile_program c.
+case: (simulation_star _ _ _ _ _ _ (simulation_step C) _ _ H _ (match_initial_configs c s))=>ms [A B].
+case: {1}_ {-1}_ / B (@erefl _ (SKIP, Kstop, s')) (@erefl _ ms)=>c3 k1 _ pc H1 H2 [E1 E2 ->] E3.
+rewrite {c3}E1 {k1}E2 /= in H1 H2; rewrite {ms}E3 in A.
+autorewrite with code in H2.
+case: (compile_cont_Kstop_inv _ _ s' H2)=>pc' [D E].
+by exists pc'; split=>//; apply/star_trans/D.
 Qed.
 
 (** Second, and more importantly, we get a proof of semantic
@@ -968,12 +965,11 @@ Qed.
     infinitely many steps, the generated code makes infinitely many
     machine transitions. *)
 
-Theorem compile_program_correct_diverging:
-  forall c s,
+Theorem compile_program_correct_diverging c s :
   infseq step (c, Kstop, s) ->
   machine_diverges (compile_program c) s.
 Proof.
-  intros. set (C := compile_program c).
-  eapply (simulation_infseq _ _ _ _ _ _ (simulation_step C)).
-  eauto. apply match_initial_configs.
+move=>H; set C := compile_program c.
+apply: (simulation_infseq _ _ _ _ _ _ (simulation_step C) (c, Kstop, s))=>//.
+by apply: match_initial_configs.
 Qed.
