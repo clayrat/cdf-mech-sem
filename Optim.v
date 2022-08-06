@@ -1,9 +1,11 @@
-From Coq Require Import ZArith Psatz Bool String Program.Equality FSets Wellfounded.
+From Coq Require Import ssreflect ssrfun ssrbool String.
+From mathcomp Require Import ssrnat eqtype.
+From mathcomp.finmap Require Import finmap.
+From deriving Require Import deriving.
 From CDF Require Import Sequences IMP Simulation.
 
+Local Open Scope fset_scope.
 Local Open Scope string_scope.
-Local Open Scope Z_scope.
-Local Open Scope list_scope.
 
 (** * 3. Optimizations and static analyses *)
 
@@ -18,6 +20,7 @@ Local Open Scope list_scope.
     a Coq module describing the type of set elements (IMP's
     identifiers) and a decidable equality between elements. *)
 
+(*
 Module Ident_Decidable <: DecidableType with Definition t := ident.
   Definition t := ident.
   Definition eq (x y: t) := x = y.
@@ -35,47 +38,49 @@ Module ISFact := FSetFacts.WFacts(IdentSet).
 Module ISProp := FSetProperties.WProperties(IdentSet).
 Module ISDecide := FSetDecide.Decide(IdentSet).
 Import ISDecide.
+*)
 
+Definition IdentSet := {fset ident}.
 (** *** Free variables *)
 
 (** The set of all variables mentioned in an expression. *)
 
-Fixpoint fv_aexp (a: aexp) : IdentSet.t :=
+Fixpoint fv_aexp (a: aexp) : IdentSet :=
   match a with
-  | CONST n => IdentSet.empty
-  | VAR v => IdentSet.singleton v
-  | PLUS a1 a2 => IdentSet.union (fv_aexp a1) (fv_aexp a2)
-  | MINUS a1 a2 => IdentSet.union (fv_aexp a1) (fv_aexp a2)
+  | CONST n => fset0
+  | VAR v => [fset v]
+  | PLUS a1 a2 => fv_aexp a1 `|` fv_aexp a2
+  | MINUS a1 a2 => fv_aexp a1 `|` fv_aexp a2
   end.
 
-Fixpoint fv_bexp (b: bexp) : IdentSet.t :=
+Fixpoint fv_bexp (b: bexp) : IdentSet :=
   match b with
-  | TRUE => IdentSet.empty
-  | FALSE => IdentSet.empty
-  | EQUAL a1 a2 => IdentSet.union (fv_aexp a1) (fv_aexp a2)
-  | LESSEQUAL a1 a2 => IdentSet.union (fv_aexp a1) (fv_aexp a2)
+  | TRUE => fset0
+  | FALSE => fset0
+  | EQUAL a1 a2 => fv_aexp a1 `|` fv_aexp a2
+  | LESSEQUAL a1 a2 => fv_aexp a1 `|` fv_aexp a2
   | NOT b1 => fv_bexp b1
-  | AND b1 b2 => IdentSet.union (fv_bexp b1) (fv_bexp b2)
+  | AND b1 b2 => fv_bexp b1 `|` fv_bexp b2
   end.
 
 (** The set of all variables used by a command.
     (We ignore the variables assigned but not used by the command.) *)
 
-Fixpoint fv_com (c: com) : IdentSet.t :=
+Fixpoint fv_com (c: com) : IdentSet :=
   match c with
-  | SKIP => IdentSet.empty
+  | SKIP => fset0
   | ASSIGN x a => fv_aexp a
-  | SEQ c1 c2 => IdentSet.union (fv_com c1) (fv_com c2)
-  | IFTHENELSE b c1 c2 => IdentSet.union (fv_bexp b) (IdentSet.union (fv_com c1) (fv_com c2))
-  | WHILE b c => IdentSet.union (fv_bexp b) (fv_com c)
+  | SEQ c1 c2 => fv_com c1 `|` fv_com c2
+  | IFTHENELSE b c1 c2 => fv_bexp b `|` (fv_com c1 `|` fv_com c2)
+  | WHILE b c => fv_bexp b `|` fv_com c
   end.
 
 (** *** Computing post-fixed points *)
 
 Section FIXPOINT.
 
-Variable F: IdentSet.t -> IdentSet.t.
-Variable default: IdentSet.t.
+Variable F: IdentSet -> IdentSet.
+Variable default: IdentSet.
 
 (** We set out to compute a set [x] of variables such that
     [F x] is a subset of [x].  This is called a post-fixed point of [F].
@@ -85,40 +90,37 @@ Variable default: IdentSet.t.
     and stopping as soon as a post-fixed point is found.
     If we are unsuccessful after [n] iterations, we return a default result. *)
 
-Fixpoint iter (n: nat) (x: IdentSet.t) : IdentSet.t :=
+Fixpoint iter (n: nat) (x: IdentSet) : IdentSet :=
   match n with
   | O => default
   | S n' =>
       let x' := F x in
-      if IdentSet.subset x' x then x else iter n' x'
+      if x' `<=` x then x else iter n' x'
   end.
 
 Definition niter := 10%nat.
 
-Definition postfixpoint : IdentSet.t := iter niter IdentSet.empty.
+Definition postfixpoint : IdentSet := iter niter fset0.
 
 Lemma postfixpoint_charact:
-  IdentSet.Subset (F postfixpoint) postfixpoint \/ postfixpoint = default.
+  F postfixpoint `<=` postfixpoint \/ postfixpoint = default.
 Proof.
-  unfold postfixpoint. generalize niter, IdentSet.empty. induction n; intros; cbn.
-- auto.
-- destruct (IdentSet.subset (F t) t) eqn:SUBSET.
-+ left. apply IdentSet.subset_2; auto.
-+ apply IHn. 
+rewrite /postfixpoint; move: niter fset0; elim=>/=.
+- by move=>_; right.
+move=>n IH t; case: ifP.
+- by move=>H; left.
+by move=>H; apply: IH.
 Qed.
 
 Hypothesis F_stable:
-  forall x, IdentSet.Subset x default -> IdentSet.Subset (F x) default.
+  forall x, x `<=` default -> F x `<=` default.
 
 Lemma postfixpoint_upper_bound:
-  IdentSet.Subset postfixpoint default.
+  postfixpoint `<=` default.
 Proof.
-  assert (REC: forall n x, IdentSet.Subset x default -> IdentSet.Subset (iter n x) default).
-  { induction n; intros; cbn.
-  - fsetdec.
-  - destruct (IdentSet.subset (F x) x); auto.
-  }
-  apply REC. fsetdec.
+suff: forall n x, x `<=` default -> iter n x `<=` default by apply.
+elim=>//= n IH t H; case: ifP=>// H1.
+by apply/IH/F_stable.
 Qed.
 
 End FIXPOINT.
@@ -128,70 +130,82 @@ End FIXPOINT.
 (** [L] is the set of variables that are live "after" command [c].
     The result of [live c L] is the set of variables live "before" [c]. *)
 
-Fixpoint live (c: com) (L: IdentSet.t) : IdentSet.t :=
+Fixpoint live (c: com) (L: IdentSet) : IdentSet :=
   match c with
   | SKIP => L
   | ASSIGN x a =>
-      if IdentSet.mem x L
-      then IdentSet.union (IdentSet.remove x L) (fv_aexp a)
+      if x \in L
+      then (L `\ x) `|` (fv_aexp a)
       else L
   | SEQ c1 c2 =>
       live c1 (live c2 L)
   | IFTHENELSE b c1 c2 =>
-      IdentSet.union (fv_bexp b) (IdentSet.union (live c1 L) (live c2 L))
+      fv_bexp b `|` (live c1 L `|` live c2 L)
   | WHILE b c =>
-      let L' := IdentSet.union (fv_bexp b) L in
-      let default := IdentSet.union (fv_com (WHILE b c)) L in
-      postfixpoint (fun x => IdentSet.union L' (live c x)) default
+      let L' := fv_bexp b `|` L in
+      let default := fv_com (WHILE b c) `|` L in
+      postfixpoint (fun x => L' `|` live c x) default
   end.
 
 (** An upper bound for the variables live "before" is the variables
     live "after" plus all variables used in command [c]. *)
 
-Lemma live_upper_bound:
-  forall c L,
-  IdentSet.Subset (live c L) (IdentSet.union (fv_com c) L).
+Lemma live_upper_bound c L :
+  live c L `<=` fv_com c `|` L.
 Proof.
-  induction c; intros; simpl.
-- fsetdec.
-- destruct (IdentSet.mem x L) eqn:MEM; fsetdec. 
-- specialize (IHc1 (live c2 L)). specialize (IHc2 L). fsetdec.
-- specialize (IHc1 L). specialize (IHc2 L). fsetdec.
-- apply postfixpoint_upper_bound. intros x. specialize (IHc x). fsetdec.
+elim: c L=>/= [|x a|c1 IH1 c2 IH2|b c1 IH1 c2 IH2|b c IH] L.
+- by rewrite fset0U.
+- case: ifP=>H.
+  - by rewrite fsetUC; apply/fsetUS/fsubD1set.
+  by apply: fsubsetUr.
+- apply: fsubset_trans; first by apply: (IH1 (live c2 L)).
+  by rewrite -fsetUA; apply/fsetUS/IH2.
+- rewrite -fsetUA; apply/fsetUS.
+  by rewrite fsetUUl; apply: fsetUSS.
+apply: postfixpoint_upper_bound=>/= t H.
+move: (IH t)=>H2.
+apply: (fsubset_trans (y:=fv_bexp b `|` L `|` fv_com c `|` t)).
+- by rewrite -[X in _ `<=` X]fsetUA; apply/fsetUS.
+move/fsetUidPl: H=><-.
+by rewrite -fsetUA fsetUAC fsetUA fsetUAC.
 Qed.
 
 (** The variables live at the entry point of a loop satisfy the following
     three conditions. *)
 
-Lemma live_while_charact:
-  forall b c L,
+Lemma live_while_charact b c L :
   let L' := live (WHILE b c) L in
-  IdentSet.Subset (fv_bexp b) L'
-  /\ IdentSet.Subset L L'
-  /\ IdentSet.Subset (live c L') L'.
+  [&& fv_bexp b `<=` L',
+      L `<=` L' &
+      live c L' `<=` L'].
 Proof.
-  intros.
-  generalize (postfixpoint_charact
-    (fun x : IdentSet.t => IdentSet.union (IdentSet.union (fv_bexp b) L) (live c x))
-          (IdentSet.union (IdentSet.union (fv_bexp b) (fv_com c)) L)).
-  simpl in L'. fold L'. intros [A|A].
-- split. fsetdec. split; fsetdec. 
-- rewrite A. split. fsetdec. split. fsetdec. 
-  eapply ISProp.subset_trans. apply live_upper_bound. fsetdec.
+rewrite /=.
+set F := fun x => fv_bexp b `|` L `|` live c x.
+set d := fv_bexp b `|` fv_com c `|` L.
+case: (postfixpoint_charact F d)=>/= H.
+- apply/and3P; split; apply/fsubset_trans/H; rewrite /F.
+  - by rewrite -fsetUA; apply/fsubsetUl.
+  - by rewrite fsetUAC fsetUC; apply/fsubsetUl.
+  by rewrite [X in _ `<=` X]fsetUC; apply/fsubsetUl.
+rewrite H; apply/and3P; split; rewrite /d.
+- by rewrite -fsetUA; apply/fsubsetUl.
+- by rewrite fsetUC; apply/fsubsetUl.
+apply: fsubset_trans; first by apply: live_upper_bound.
+by rewrite fsetUCA -fsetUA [X in _ `|` X `<=` _]fsetUA fsetUid fsetUA.
 Qed.
 
 (** ** 3.2.  A compiler optimization: dead code elimination *)
 
 (** *** The program transformation *)
 
-(** Dead code elimination (DCE) consists in replacing assignments 
+(** Dead code elimination (DCE) consists in replacing assignments
     [x := a] to dead variables [x] by [SKIP] instructions. The useless
     computation of [a] is eliminated. *)
 
-Fixpoint dce (c: com) (L: IdentSet.t): com :=
+Fixpoint dce (c: com) (L: IdentSet): com :=
   match c with
   | SKIP => SKIP
-  | ASSIGN x a => if IdentSet.mem x L then ASSIGN x a else SKIP
+  | ASSIGN x a => if x \in L then ASSIGN x a else SKIP
   | SEQ c1 c2 => SEQ (dce c1 (live c2 L)) (dce c2 L)
   | IFTHENELSE b c1 c2 => IFTHENELSE b (dce c1 L) (dce c2 L)
   | WHILE b c => WHILE b (dce c (live (WHILE b c) L))
@@ -201,7 +215,7 @@ Fixpoint dce (c: com) (L: IdentSet.t): com :=
 
 Print Euclidean_division.
 
-Eval compute in (dce Euclidean_division (IdentSet.singleton "r")).
+Eval compute in (dce Euclidean_division [fset "r"]).
 
 (** Effect of the code transformation:
 <<
@@ -214,7 +228,7 @@ Eval compute in (dce Euclidean_division (IdentSet.singleton "r")).
 >>
 *)
 
-Eval compute in (dce Euclidean_division (IdentSet.singleton "q")).
+Eval compute in (dce Euclidean_division [fset "q"]).
 
 (** Here, the program is unchanged. *)
 
@@ -223,7 +237,7 @@ Eval compute in (dce Euclidean_division (IdentSet.singleton "q")).
 (** Two stores agree on a set [L] of live variables
     if they associate the same values to each live variable. *)
 
-Definition agree (L: IdentSet.t) (s1 s2: store) : Prop :=
+Definition agree (L: IdentSet) (s1 s2: store) : Prop :=
   forall x, IdentSet.In x L -> s1 x = s2 x.
 
 (** This definition is monotonic with respect to the set [L]. *)
@@ -243,7 +257,7 @@ Lemma aeval_agree:
 Proof.
   induction a; cbn; intros.
 - auto.
-- apply H. fsetdec. 
+- apply H. fsetdec.
 - f_equal; [apply IHa1 | apply IHa2]; eapply agree_mon; eauto; fsetdec.
 - f_equal; [apply IHa1 | apply IHa2]; eapply agree_mon; eauto; fsetdec.
 Qed.
@@ -448,7 +462,7 @@ Qed.
     Finally, it eliminates assignments [x := y] where the variables
     [x] and [y] are renamed into the same variable [z]. *)
 
-Fixpoint regalloc (c: com) (L: IdentSet.t) : com :=
+Fixpoint regalloc (c: com) (L: IdentSet) : com :=
   match c with
   | SKIP => SKIP
   | ASSIGN x a =>
@@ -474,7 +488,7 @@ Fixpoint regalloc (c: com) (L: IdentSet.t) : com :=
     for each live variable [x] in [L],
     the values of [x] in [s1] and of [f x] in [s2] are the same. *)
 
-Definition agree' (L: IdentSet.t) (s1 s2: store) : Prop :=
+Definition agree' (L: IdentSet) (s1 s2: store) : Prop :=
   forall x, IdentSet.In x L -> s1 x = s2 (f x).
 
 (** This definition is monotonic with respect to the set [L]. *)
@@ -495,7 +509,7 @@ Lemma aeval_agree':
 Proof.
   induction a; cbn; intros.
 - auto.
-- apply H. fsetdec. 
+- apply H. fsetdec.
 - f_equal; [apply IHa1 | apply IHa2]; eapply agree'_mon; eauto; fsetdec.
 - f_equal; [apply IHa1 | apply IHa2]; eapply agree'_mon; eauto; fsetdec.
 Qed.
@@ -594,21 +608,21 @@ Qed.
     If this Boolean-valued criterion evaluates to true,
     the renaming is a correct register allocation. *)
 
-Fixpoint correct_allocation (c: com) (L: IdentSet.t) : bool :=
+Fixpoint correct_allocation (c: com) (L: IdentSet) : bool :=
   match c with
   | SKIP =>
       true
   | ASSIGN x a =>
       if IdentSet.mem x L then
         match expr_is_var a with
-        | None => 
+        | None =>
             IdentSet.for_all (fun z => String.eqb z x || negb (String.eqb (f z) (f x))) L
         | Some y =>
             IdentSet.for_all (fun z => String.eqb z x || String.eqb z y
                                     || negb (String.eqb (f z) (f x))) L
         end
       else true
-  | SEQ c1 c2 => 
+  | SEQ c1 c2 =>
       correct_allocation c1 (live c2 L) && correct_allocation c2 L
   | IFTHENELSE b c1 c2 =>
       correct_allocation c1 L && correct_allocation c2 L
@@ -636,8 +650,8 @@ Proof.
     destruct (expr_is_var a) as [y|] eqn:is_var.
     * apply expr_is_var_correct in is_var. subst a.
       assert (NONINTF: forall z, IdentSet.In z L -> z <> x -> z <> y -> f z <> f x).
-      { apply IdentSet.for_all_2 in CORR. 
-      - intros. apply CORR in H. 
+      { apply IdentSet.for_all_2 in CORR.
+      - intros. apply CORR in H.
         destruct (String.eqb_spec z x). congruence.
         destruct (String.eqb_spec z y). congruence.
         destruct (String.eqb_spec (f z) (f x)). discriminate. auto.
@@ -656,8 +670,8 @@ Proof.
       assert (EVAL: aeval a s = aeval (rename_aexp a) s1)
       by (eapply aeval_agree'; eapply agree'_mon; eauto; fsetdec).
       assert (NONINTF: forall z, IdentSet.In z L -> z <> x -> f z <> f x).
-      { apply IdentSet.for_all_2 in CORR. 
-      - intros. apply CORR in H. 
+      { apply IdentSet.for_all_2 in CORR.
+      - intros. apply CORR in H.
         destruct (String.eqb_spec z x). congruence.
         destruct (String.eqb_spec (f z) (f x)). discriminate. auto.
       - hnf. intros; congruence.
@@ -791,8 +805,8 @@ Section FIXPOINT_FINITE_SETS.
     in the program being analyzed.
 *)
 
-Variable U: IdentSet.t.
-Definition finset := { x: IdentSet.t | IdentSet.Subset x U }.
+Variable U: IdentSet.
+Definition finset := { x: IdentSet | IdentSet.Subset x U }.
 
 (** We equip the type [finset] with the operations and the properties
     expected in the [Fixpoints] library. *)
@@ -858,12 +872,12 @@ Proof.
   apply ISProp.subset_cardinal_lt with elt. auto. fsetdec. fsetdec.
 - apply IdentSet.choose_2 in CHOOSE.
   assert (finset_le y x).
-  { intros e IN. 
+  { intros e IN.
     destruct (ISProp.In_dec e (proj1_sig x)); auto.
     elim (CHOOSE e). apply IdentSet.diff_3; auto. }
   elim H0. apply ISProp.subset_antisym; auto.
 Qed.
- 
+
 Lemma finset_gt_wf:
   well_founded (fun x y => finset_le y x /\ ~finset_eq y x).
 Proof.
@@ -909,7 +923,7 @@ Qed.
 (** Let's try to redefine liveness analysis, using finite sets [finset]
     and fixed point computation [finset_fixpoint].
 *)
- 
+
 Fail Fixpoint live' (c: com) (L: finset) : finset :=
   match c with
   | SKIP => L
@@ -971,7 +985,7 @@ Defined.
 Next Obligation.
   red; intros. rename x0 into L1. rename y into L2. unfold finset_le in *.
   destruct (IdentSet.mem x (proj1_sig L1)) eqn:M1; cbn.
-- replace (IdentSet.mem x (proj1_sig L2)) with true. 
+- replace (IdentSet.mem x (proj1_sig L2)) with true.
   cbn. fsetdec.
   symmetry. apply IdentSet.mem_1. apply H. apply IdentSet.mem_2; auto.
 - destruct (IdentSet.mem x (proj1_sig L2)) eqn:M2; cbn; auto.
