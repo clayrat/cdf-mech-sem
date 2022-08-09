@@ -1,11 +1,10 @@
-From Coq Require Import ssreflect ssrfun ssrbool String.
+From Coq Require Import ssreflect ssrfun ssrbool.
 From mathcomp Require Import ssrnat eqtype.
 From mathcomp.finmap Require Import finmap.
 From deriving Require Import deriving.
 From CDF Require Import Sequences IMP Simulation.
 
 Local Open Scope fset_scope.
-Local Open Scope string_scope.
 
 (** * 3. Optimizations and static analyses *)
 
@@ -215,7 +214,9 @@ Fixpoint dce (c: com) (L: IdentSet): com :=
 
 Print Euclidean_division.
 
-Eval compute in (dce Euclidean_division [fset "r"]).
+(* TODO try switching to RBT/AVL-based sets from FAV *)
+(*
+Eval compute in (dce Euclidean_division [fset R]).
 
 (** Effect of the code transformation:
 <<
@@ -228,9 +229,10 @@ Eval compute in (dce Euclidean_division [fset "r"]).
 >>
 *)
 
-Eval compute in (dce Euclidean_division [fset "q"]).
+Eval compute in (dce Euclidean_division [fset Q]).
 
 (** Here, the program is unchanged. *)
+*)
 
 (** *** Semantic preservation *)
 
@@ -238,13 +240,13 @@ Eval compute in (dce Euclidean_division [fset "q"]).
     if they associate the same values to each live variable. *)
 
 Definition agree (L: IdentSet) (s1 s2: store) : Prop :=
-  forall x, IdentSet.In x L -> s1 x = s2 x.
+  forall x, x \in L -> s1 x = s2 x.
 
 (** This definition is monotonic with respect to the set [L]. *)
 
 Lemma agree_mon:
   forall L L' s1 s2,
-  agree L' s1 s2 -> IdentSet.Subset L L' -> agree L s1 s2.
+  agree L' s1 s2 -> L `<=` L' -> agree L s1 s2.
 Proof.
   unfold IdentSet.Subset, agree; intros. auto.
 Qed.
@@ -733,11 +735,11 @@ End RENAMING.
 
 Definition trivial_alloc := fun (x: ident) => x.
 
-Eval compute in (correct_allocation trivial_alloc Euclidean_division (IdentSet.singleton "r")).
+Eval compute in (correct_allocation trivial_alloc Euclidean_division (IdentSet.singleton R)).
 
 (** Result: [true]. *)
 
-Eval compute in (regalloc trivial_alloc Euclidean_division (IdentSet.singleton "r")).
+Eval compute in (regalloc trivial_alloc Euclidean_division (IdentSet.singleton R)).
 
 (** Result:
 <<
@@ -750,16 +752,16 @@ Eval compute in (regalloc trivial_alloc Euclidean_division (IdentSet.singleton "
 >>
 *)
 
-(** Here is a nontrivial renaming that places variables "r" and "a" in
-    the same register "a". *)
+(** Here is a nontrivial renaming that places variables R and A in
+    the same register A. *)
 
-Definition my_alloc := fun (x: ident) => if string_dec x "r" then "a" else x.
+Definition my_alloc := fun (x: ident) => if string_dec x R then A else x.
 
-Eval compute in (correct_allocation my_alloc Euclidean_division (IdentSet.singleton "r")).
+Eval compute in (correct_allocation my_alloc Euclidean_division (IdentSet.singleton R)).
 
 (** Result: [true]. *)
 
-Eval compute in (regalloc my_alloc Euclidean_division (IdentSet.singleton "r")).
+Eval compute in (regalloc my_alloc Euclidean_division (IdentSet.singleton R)).
 
 (** Here is the result of register allocation.
     Note the elimination of the assignment [r := a].
@@ -776,9 +778,9 @@ Eval compute in (regalloc my_alloc Euclidean_division (IdentSet.singleton "r")).
 (** In contrast, if we try to place variables [r] and [b] in the same location,
     the validation function [correct_allocation] rejects the allocation. *)
 
-Definition wrong_alloc := fun (x: ident) => if string_dec x "r" then "b" else x.
+Definition wrong_alloc := fun (x: ident) => if string_dec x R then B else x.
 
-Eval compute in (correct_allocation my_alloc Euclidean_division (IdentSet.singleton "r")).
+Eval compute in (correct_allocation my_alloc Euclidean_division (IdentSet.singleton R)).
 
 (** Result [false]. *)
 

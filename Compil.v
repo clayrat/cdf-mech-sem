@@ -1,10 +1,9 @@
 From Equations Require Import Equations.
-From Coq Require Import ssreflect ssrfun ssrbool String.
+From Coq Require Import ssreflect ssrfun ssrbool.
 From mathcomp Require Import ssrnat ssrint ssralg ssrnum ssrAC eqtype order seq.
 From CDF Require Import Sequences IMP Simulation.
 
 Import GRing.Theory.
-Local Open Scope string_scope.
 Local Open Scope ring_scope.
 Local Open Scope seq_scope.
 
@@ -200,9 +199,9 @@ Eval compute in (compile_aexp (PLUS (CONST 1) (CONST 2))).
 
 (** Result: [:: Iconst 1%Z; Iconst 2%Z; Iadd] *)
 
-Eval compute in (compile_aexp (PLUS (VAR "x") (MINUS (VAR "y") (CONST 1)))).
+Eval compute in (compile_aexp (PLUS (VAR A) (MINUS (VAR B) (CONST 1)))).
 
-(** Result: [:: Ivar "x"; Ivar "y"; Iconst 1%Z; Iopp; Iadd; Iadd]. *)
+(** Result: [:: Ivar A; Ivar B; Iconst 1%Z; Iopp; Iadd; Iadd]. *)
 
 (** For Boolean expressions [b], we could produce code that deposits [1] or [0]
     at the top of the stack, depending on whether [b] is true or false.
@@ -234,20 +233,20 @@ Fixpoint compile_bexp (b: bexp) (d1: int) (d0: int) : code :=
 
 (** Examples are in order. *)
 
-Eval compute in (compile_bexp (EQUAL (VAR "x") (CONST 1)) 12 34).
+Eval compute in (compile_bexp (EQUAL (VAR X) (CONST 1)) 12 34).
 
-(** Result: [:: Ivar "x"; Iconst 1%Z; Ibeq 12%Z 34%Z]. *)
+(** Result: [:: Ivar X; Iconst 1%Z; Ibeq 12%Z 34%Z]. *)
 
-Eval compute in (compile_bexp (AND (LESSEQUAL (CONST 1) (VAR "x"))
-                                   (LESSEQUAL (VAR "x") (CONST 10))) 0 10).
+Eval compute in (compile_bexp (AND (LESSEQUAL (CONST 1) (VAR X))
+                                   (LESSEQUAL (VAR X) (CONST 10))) 0 10).
 
-(** Result: [:: Iconst 1%Z; Ivar "x"; Ible 0%Z 13%Z; Ivar "x";
+(** Result: [:: Iconst 1%Z; Ivar X; Ible 0%Z 13%Z; Ivar X;
                 Iconst 10%Z; Ible 0%Z 10%Z] *)
 
-Eval compute in (compile_bexp (OR (LESSEQUAL (CONST 1) (VAR "x"))
-                                  (LESSEQUAL (VAR "x") (CONST 10))) 0 10).
+Eval compute in (compile_bexp (OR (LESSEQUAL (CONST 1) (VAR X))
+                                  (LESSEQUAL (VAR X) (CONST 10))) 0 10).
 
-(** Result: [:: Iconst 1%Z; Ivar "x"; Ible 3%Z 0%Z; Ivar "x";
+(** Result: [:: Iconst 1%Z; Ivar X; Ible 3%Z 0%Z; Ivar X;
                 Iconst 10%Z; Ible 0%Z 10%Z] *)
 
 Eval compute in (compile_bexp (NOT (AND TRUE FALSE)) 12 34).
@@ -293,18 +292,18 @@ Definition compile_program (p: com) : code :=
 
 (** Examples of compilation: *)
 
-Eval compute in (compile_program (ASSIGN "x" (PLUS (VAR "x") (CONST 1)))).
+Eval compute in (compile_program (ASSIGN X (PLUS (VAR X) (CONST 1)))).
 
-(** Result: [:: Ivar "x"; Iconst 1%Z; Iadd; Isetvar "x"; Ihalt] *)
+(** Result: [:: Ivar X; Iconst 1%Z; Iadd; Isetvar X; Ihalt] *)
 
 Eval compute in (compile_program (WHILE TRUE SKIP)).
 
 (** Result: [:: Ibranch (-1)%Z; Ihalt]. *)
 
-Eval compute in (compile_program (IFTHENELSE (EQUAL (VAR "x") (CONST 1)) (ASSIGN "x" (CONST 0)) SKIP)).
+Eval compute in (compile_program (IFTHENELSE (EQUAL (VAR X) (CONST 1)) (ASSIGN X (CONST 0)) SKIP)).
 
-(** Result: [:: Ivar "x"; Iconst 1%Z; Ibeq 0%Z 3%Z; Iconst 0%Z;
-                Isetvar "x"; Ibranch 0%Z; Ihalt]. *)
+(** Result: [:: Ivar X; Iconst 1%Z; Ibeq 0%Z 3%Z; Iconst 0%Z;
+                Isetvar X; Ibranch 0%Z; Ihalt]. *)
 
 (** *** Exercise (1 star) *)
 

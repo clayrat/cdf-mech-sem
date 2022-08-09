@@ -1,14 +1,49 @@
 From Equations Require Import Equations.
-From Coq Require Import ssreflect ssrfun ssrbool String.
-From mathcomp Require Import ssrnat ssrint ssralg ssrnum eqtype order.
+From Coq Require Import ssreflect ssrfun ssrbool.
+From mathcomp Require Import ssrnat ssrint ssralg ssrnum eqtype choice.
 From CDF Require Import Sequences Simulation.
 
 Derive Signature for star.
 
-Import Order.Theory GRing.Theory.
-Local Open Scope string_scope.
+Import GRing.Theory.
 Local Open Scope ring_scope.
 
+(* we'll use this instead of strings to make things faster *)
+Variant ident := A | B | R | Q | X.
+
+Definition pickle_id (a : ident) : nat :=
+  match a with
+  | A => 0
+  | B => 1
+  | R => 2
+  | Q => 3
+  | X => 4
+  end.
+
+Definition unpickle_id (a : nat) : option ident :=
+  match a with
+  | 0 => Some A
+  | 1 => Some B
+  | 2 => Some R
+  | 3 => Some Q
+  | 4 => Some X
+  | _ => None
+  end.
+
+Lemma pickleIdK : pcancel pickle_id unpickle_id.
+Proof. by case. Qed.
+
+Definition ident_eqMixin := PcanEqMixin pickleIdK.
+Canonical ident_eqType := Eval hnf in EqType _ ident_eqMixin.
+
+Definition ident_choiceMixin := PcanChoiceMixin pickleIdK.
+Canonical ident_choiceType := Eval hnf in ChoiceType _ ident_choiceMixin.
+
+Definition ident_countMixin := PcanCountMixin pickleIdK.
+Canonical ident_countType := Eval hnf in CountType _ ident_countMixin.
+
+
+(*
 Definition eq_string (a b : string) : bool :=
   match string_dec a b with left _ => true | right _ => false end.
 
@@ -17,12 +52,11 @@ Proof. move=>x y; apply: (iffP idP); rewrite /eq_string; by case: (string_dec _ 
 
 Canonical Structure string_eqMixin := EqMixin eq_stringP.
 Canonical Structure string_eqType := Eval hnf in EqType _ string_eqMixin.
+*)
 
 (** * 1.  The IMP language *)
 
 (** ** 1.1 Arithmetic expressions *)
-
-Definition ident := string.
 
 (** The abstract syntax: an arithmetic expression is either... *)
 
@@ -49,22 +83,22 @@ Fixpoint aeval (a: aexp) (s: store) : int :=
 (** Such evaluation functions / denotational semantics have many uses.
     First, we can use [aeval] to evaluate a given expression in a given store. *)
 
-Eval compute in (aeval (PLUS (VAR "x") (MINUS (VAR "x") (CONST 1))) (fun => 2)).
+Eval compute in (aeval (PLUS (VAR X) (MINUS (VAR X) (CONST 1))) (fun => 2)).
 
 (** Result: [ = 3 : int ]. *)
 
 (** We can also do partial evaluation with respect to an unknown store *)
 
-Eval cbn in (aeval (PLUS (VAR "x") (MINUS (CONST 10) (CONST 1)))).
+Eval cbn in (aeval (PLUS (VAR X) (MINUS (CONST 10) (CONST 1)))).
 
-(** Result: [ = fun s : store => s "x" + 9 ]. *)
+(** Result: [ = fun s : store => s X + 9 ]. *)
 
 (** We can prove mathematical properties of a given expression. *)
 
 Lemma aeval_xplus1 s x :
   aeval (PLUS (VAR x) (CONST 1)) s > aeval (VAR x) s.
 Proof.
-by rewrite ltz_addr1 lexx.
+by rewrite ltz_addr1.
 Qed.
 
 (** Finally, we can prove "meta-properties" that hold for all expressions.
@@ -263,8 +297,8 @@ Inductive com: Type :=
 Infix ";;" := SEQ (at level 80, right associativity).
 
 (** Here is an IMP program that performs Euclidean division by
-  repeated subtraction.  At the end of the program, "q" contains
-  the quotient of "a" by "b", and "r" contains the remainder.
+  repeated subtraction.  At the end of the program, Q contains
+  the quotient of A by B, and R contains the remainder.
   In pseudocode:
 <<
        r := a; q := 0;
@@ -274,11 +308,11 @@ Infix ";;" := SEQ (at level 80, right associativity).
 *)
 
 Definition Euclidean_division :=
-  ASSIGN "r" (VAR "a") ;;
-  ASSIGN "q" (CONST 0) ;;
-  WHILE (LESSEQUAL (VAR "b") (VAR "r"))
-    (ASSIGN "r" (MINUS (VAR "r") (VAR "b")) ;;
-     ASSIGN "q" (PLUS (VAR "q") (CONST 1))).
+  ASSIGN R (VAR A) ;;
+  ASSIGN Q (CONST 0) ;;
+  WHILE (LESSEQUAL (VAR B) (VAR R))
+    (ASSIGN R (MINUS (VAR R) (VAR B)) ;;
+     ASSIGN Q (PLUS (VAR Q) (CONST 1))).
 
 (** A useful operation over stores:
     [update x v s] is the store that maps [x] to [v] and is equal to [s] for
@@ -626,10 +660,10 @@ Fixpoint cexec_f (fuel: nat) (s: store) (c: com) : option store :=
     above. *)
 
 Eval compute in
-  (let s := update "a" 14 (update "b" 3 (fun => 0)) in
+  (let s := update A 14 (update B 3 (fun => 0)) in
    match cexec_f 8 s Euclidean_division with
    | None => None
-   | Some s' => Some (s' "q", s' "r")
+   | Some s' => Some (s' Q, s' R)
    end).
 
 (** *** Exercise (3 stars) *)
